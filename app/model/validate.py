@@ -79,6 +79,49 @@ _INDEFINITE = frozenset(
 )
 
 
+#: Гражданство в eu_id должно быть одной из 27 стран ЕС. Модель переписывает
+#: его «как в документе», поэтому принимаем разные записи: название
+#: по-английски и на языке страны, прилагательное, код ISO 3166-1 alpha-3
+#: (так пишут в MRZ и на ID-картах) и русское название на случай, если модель
+#: переведёт. Сравниваются слова после _country_words: без регистра и диакритики.
+_EU_COUNTRIES: dict[str, tuple[str, ...]] = {
+    "Austria": ("austria", "austrian", "osterreich", "osterreichisch", "aut", "австрия"),
+    "Belgium": ("belgium", "belgian", "belgique", "belge", "belgie", "belgien", "belgisch", "bel", "бельгия"),
+    "Bulgaria": ("bulgaria", "bulgarian", "balgariya", "българия", "bgr", "болгария"),
+    "Croatia": ("croatia", "croatian", "hrvatska", "hrvatsko", "hrv", "хорватия"),
+    "Cyprus": ("cyprus", "cypriot", "kypros", "κυπρος", "κυπριακη", "cyp", "кипр"),
+    "Czechia": ("czechia", "czech", "cesko", "ceska", "cze", "чехия", "чешская"),
+    "Denmark": ("denmark", "danish", "danmark", "dansk", "dnk", "дания"),
+    "Estonia": ("estonia", "estonian", "eesti", "est", "эстония"),
+    "Finland": ("finland", "finnish", "suomi", "suomen", "fin", "финляндия"),
+    "France": ("france", "french", "francaise", "francais", "fra", "франция"),
+    "Germany": ("germany", "german", "deutschland", "deutsch", "deutsche", "deu", "германия"),
+    "Greece": ("greece", "greek", "hellenic", "hellas", "ellada", "ελλαδα", "ελληνικη", "grc", "греция"),
+    "Hungary": ("hungary", "hungarian", "magyar", "magyarorszag", "hun", "венгрия"),
+    "Ireland": ("ireland", "irish", "eire", "irl", "ирландия"),
+    "Italy": ("italy", "italian", "italia", "italiana", "italiano", "ita", "италия"),
+    "Latvia": ("latvia", "latvian", "latvija", "latvijas", "lva", "латвия"),
+    "Lithuania": ("lithuania", "lithuanian", "lietuva", "lietuvos", "ltu", "литва"),
+    "Luxembourg": ("luxembourg", "luxembourgish", "luxembourgeoise", "luxembourgeois", "luxemburg", "letzebuerg", "lux", "люксембург"),
+    "Malta": ("malta", "maltese", "maltija", "mlt", "мальта"),
+    "Netherlands": ("netherlands", "dutch", "nederland", "nederlandse", "holland", "nld", "нидерланды"),
+    "Poland": ("poland", "polish", "polska", "polskie", "pol", "польша"),
+    "Portugal": ("portugal", "portuguese", "portuguesa", "prt", "португалия"),
+    "Romania": ("romania", "romanian", "romana", "rou", "румыния"),
+    "Slovakia": ("slovakia", "slovak", "slovensko", "slovenska", "svk", "словакия"),
+    "Slovenia": ("slovenia", "slovenian", "slovene", "slovenija", "svn", "словения"),
+    "Spain": ("spain", "spanish", "espana", "espanola", "espanol", "esp", "испания"),
+    "Sweden": ("sweden", "swedish", "sverige", "svensk", "swe", "швеция"),
+}
+_EU_WORDS = frozenset(word for names in _EU_COUNTRIES.values() for word in names)
+#: Двухбуквенные коды (и «D» Германии в MRZ) — только если это всё значение:
+#: внутри текста «at», «be», «it» — обычные слова.
+_EU_SHORT_CODES = frozenset({
+    "at", "be", "bg", "hr", "cy", "cz", "dk", "ee", "fi", "fr", "de", "d", "gr", "el",
+    "hu", "ie", "it", "lv", "lt", "lu", "mt", "nl", "pl", "pt", "ro", "sk", "si", "es", "se",
+})
+
+
 def _clean(value: object) -> str | None:
     """Строка без лишних пробелов, либо None для «пустых» значений модели."""
     if value is None:
@@ -266,6 +309,26 @@ def _check_latin(name: str, value: str) -> FieldValidation:
     return _ok(name)
 
 
+def _country_words(value: str) -> list[str]:
+    """Слова значения без регистра и диакритики: «Française» -> ["francaise"]."""
+    text = unicodedata.normalize("NFKD", value.casefold())
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    return re.findall(r"[^\W\d_]+", text)
+
+
+def _check_eu_citizenship(name: str, value: str) -> FieldValidation:
+    """Гражданство не из ЕС — замечание, а не ошибка: поля-то извлеклись.
+
+    Так ловится, например, паспорт другой страны, загруженный в слот eu_id.
+    """
+    words = _country_words(value)
+    if len(words) == 1 and words[0] in _EU_SHORT_CODES:
+        return _ok(name)
+    if any(word in _EU_WORDS for word in words):
+        return _ok(name)
+    return _bad(name, "Гражданство не входит в ЕС")
+
+
 def validate_field(
     doc_type: DocType,
     name: str,
@@ -309,6 +372,8 @@ def validate_field(
 
         case (DocType.EU_ID, "full_name"):
             return _check_latin(name, text)
+        case (DocType.EU_ID, "citizenship"):
+            return _check_eu_citizenship(name, text)
         case (DocType.EU_ID, "expiry_date"):
             return _check_not_expired(name, text, today)
         case (DocType.EU_ID, "birth_date"):

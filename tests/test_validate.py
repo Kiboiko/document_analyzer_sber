@@ -111,6 +111,17 @@ run(D.EU_ID, {"number": "X1234567", "full_name": "Иванов Иван",
               "birth_date": "01.01.1990", "citizenship": "POL",
               "expiry_date": "01.01.2030"},
     "flagged", expect_note="латиница", title="ФИО кириллицей в документе ЕС")
+EU_BASE = {"number": "X1234567", "full_name": "JAN KOWALSKI",
+           "birth_date": "01.01.1990", "expiry_date": "01.01.2030"}
+for citizenship in ("POL", "Polska", "Republic of Poland", "DEUTSCH", "D", "DE",
+                    "Française", "Česká republika", "Ελληνική", "Österreich",
+                    "Германия"):
+    run(D.EU_ID, {**EU_BASE, "citizenship": citizenship},
+        "done", title=f"гражданство ЕС: {citizenship}")
+for citizenship in ("BLR", "Republic of Belarus", "Республика Беларусь", "IND",
+                    "Indian", "Republic of India", "UZB", "GBR", "Swiss", "Norway"):
+    run(D.EU_ID, {**EU_BASE, "citizenship": citizenship},
+        "flagged", expect_note="не входит в ЕС", title=f"гражданство не ЕС: {citizenship}")
 run(D.RESIDENCE_PERMIT, {"number": "82 1234567", "issue_date": "10.10.2021",
                          "expiry_date": "01.01.2030", "permit_type": "временное"},
     "done", title="действующий ВНЖ")
