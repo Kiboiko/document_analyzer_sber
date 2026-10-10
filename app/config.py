@@ -35,9 +35,14 @@ class Settings(BaseSettings):
     #: cloud | local — смена провайдера без правки кода (TZ 7).
     model_provider: str = "cloud"
 
-    # OCR: self-hosted olmOCR на vLLM, адрес с суффиксом /v1
-    olmocr_server: str = ""
-    olmocr_model: str = "allenai/olmOCR-2-7B-1025-FP8"
+    # OCR: HTTP-сервис организаторов (olmOCR за ним). Принимает PDF/PNG/JPEG/HEIC
+    # как есть и отдаёт текст markdown; конвертацию делает сам сервис.
+    ocr_service_url: str = "https://ocr.ilons.ru"
+    #: Токен сервиса (заголовок X-API-Token). Пусто — открытый доступ.
+    ocr_client_token: str = ""
+    #: Дедлайн самого сервиса 240 с; наш таймаут больше него с запасом на сеть,
+    #: иначе мы оборвём запрос раньше, чем придёт осмысленный 504.
+    ocr_timeout_s: int = 300
 
     # LLM cloud: Qwen через внешний API ilons
     llm_base_url: str = "https://llm.ilons.ru"

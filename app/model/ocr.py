@@ -1,47 +1,48 @@
-"""Клиент self-hosted olmOCR на vLLM (OLMOCR_SERVER) — шаг 1 разбора.
+"""Клиент HTTP-сервиса OCR (OCR_SERVICE_URL) — шаг 1 разбора.
 
-Вход может быть фото (соискатель снимает документ телефоном) или PDF.
-Приводим всё к PNG-страницам и спрашиваем текст у olmOCR.
+Сервис организаторов принимает файл как есть (PDF, PNG, JPEG, HEIC), сам
+приводит его к PDF и возвращает распознанный текст документа в markdown:
+
+    POST {OCR_SERVICE_URL}/ocr   multipart/form-data, поле "file"
+    200  text/markdown — текст документа
+    400  нечитаемый файл          401  неверный X-API-Token
+    413  файл слишком большой     502  ошибка vLLM на стороне сервиса
+    504  сервис не уложился в свой дедлайн (по умолчанию 240 с)
+
+Ошибки отличаются тем, есть ли смысл повторять запрос и что сказать
+соискателю, поэтому каждый код превращается в `OcrError` с этими признаками
+(`retryable`, `user_message`), а решение о статусе документа остаётся за воркером.
 """
 
 from __future__ import annotations
 
-import base64
-import io
 import logging
 
 import httpx
 
 from app.config import settings
-from app.model.providers import ProviderError, describe_http_error, response_json
+from app.model.providers import ProviderError, describe_http_error
 
 log = logging.getLogger(__name__)
 
-__all__ = ["to_png_pages", "ocr_text", "sniff_mime", "OcrError"]
+__all__ = ["ocr_document", "sniff_mime", "OcrError"]
 
 
 class OcrError(ProviderError):
-    """OCR недоступен или не смог обработать страницу."""
+    """OCR недоступен или не смог обработать файл."""
 
 
-#: Промпт, на котором обучался olmOCR-2: просим «прочитать страницу как есть».
-#: Модель отвечает YAML-front-matter + текст, front matter мы отрезаем.
-_OLMOCR_PROMPT = (
-    "Attached is one page of a document that you must process. "
-    "Just return the plain text representation of this document as if you "
-    "were reading it naturally. Convert equations to LateX and tables to "
-    "markdown.\n"
-    "Return your output as markdown, with a front matter section on top "
-    "specifying values for the primary_language, is_rotation_valid, "
-    "rotation_correction, is_table, and is_diagram parameters."
-)
+#: Что показать соискателю при сбое самого сервиса: в нём мы не виноваты и
+#: он не должен гадать, что с его файлом.
+_SERVICE_DOWN = "Сервис распознавания временно недоступен. Мы повторим попытку позже."
 
-#: Больше 2000 px по длинной стороне модели не нужно, а трафик и время растут.
-_MAX_SIDE = 2000
-#: Разрешение рендера PDF: 200 dpi хватает, чтобы читались серия и номер.
-_PDF_SCALE = 200 / 72
-#: Сколько страниц разбираем максимум — защита от PDF на 300 листов.
-_MAX_PAGES = 5
+_EXT_BY_MIME = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/tiff": ".tif",
+    "application/pdf": ".pdf",
+}
 
 
 def sniff_mime(data: bytes) -> str:
@@ -62,142 +63,122 @@ def sniff_mime(data: bytes) -> str:
     return "application/octet-stream"
 
 
-def to_png_pages(data: bytes, mime: str | None = None) -> list[bytes]:
-    """Привести вход (изображение или PDF) к списку PNG-страниц.
+def _service_url() -> str:
+    return f"{settings.ocr_service_url.rstrip('/')}/ocr"
 
-    Битый ввод — это OcrError с понятным текстом, а не падение воркера.
+
+def _headers() -> dict[str, str]:
+    # Токен нужен не везде: при открытом доступе заголовок не отправляем.
+    # В журнал токен не пишем нигде.
+    if settings.ocr_client_token:
+        return {"X-API-Token": settings.ocr_client_token}
+    return {}
+
+
+def _detail(resp: httpx.Response) -> str:
+    """Пояснение сервиса из тела ошибки: {"detail": "..."} либо просто текст."""
+    try:
+        body = resp.json()
+        if isinstance(body, dict) and "detail" in body:
+            return str(body["detail"])[:200]
+    except ValueError:
+        pass
+    return (resp.text or "").strip().replace("\n", " ")[:200]
+
+
+def _error_for_status(status: int, detail: str) -> OcrError:
+    """Код ответа сервиса -> ошибка с признаками для воркера."""
+    suffix = f": {detail}" if detail else ""
+
+    if status == 400:
+        # Сервис отвечает «not a readable PDF» даже на фото: он приводит всё
+        # к PDF. Для соискателя это просто нечитаемый файл.
+        return OcrError(
+            f"OCR: файл не читается (HTTP 400){suffix}",
+            retryable=False,
+            user_message="Не удалось прочитать файл. Загрузите другое фото или скан.",
+        )
+    if status == 401:
+        return OcrError(
+            "OCR: сервис отклонил токен (HTTP 401), проверьте OCR_CLIENT_TOKEN",
+            retryable=False,
+            user_message=_SERVICE_DOWN,
+        )
+    if status == 413:
+        return OcrError(
+            f"OCR: файл слишком большой для сервиса (HTTP 413){suffix}",
+            retryable=False,
+            user_message="Файл слишком большой для распознавания. "
+            "Загрузите файл меньшего размера.",
+        )
+    if status in (502, 504):
+        kind = "ошибка модели" if status == 502 else "сервис не уложился во время"
+        return OcrError(
+            f"OCR: {kind} на стороне сервиса (HTTP {status}){suffix}",
+            retryable=True,
+            user_message=_SERVICE_DOWN,
+        )
+    if status >= 500:
+        return OcrError(
+            f"OCR: сбой сервиса (HTTP {status}){suffix}",
+            retryable=True,
+            user_message=_SERVICE_DOWN,
+        )
+    # Прочие 4xx (404 на неверный адрес, 405, 422...) — ошибка нашей настройки
+    # или контракта; повтор не поможет, а соискатель ни при чём.
+    return OcrError(
+        f"OCR: неожиданный ответ сервиса (HTTP {status}){suffix}",
+        retryable=False,
+        user_message=_SERVICE_DOWN,
+    )
+
+
+async def ocr_document(data: bytes) -> str:
+    """Распознать файл целиком и вернуть текст документа (markdown).
+
+    Файл уходит как есть: конвертация и рендер страниц на стороне сервиса.
+    Пустой текст — это ошибка, а не «пустой документ»: дальше он ушёл бы в
+    LLM, и документ выглядел бы разобранным без единого поля.
     """
     if not data:
-        raise OcrError("пустой файл")
-
-    mime = mime or sniff_mime(data)
-
-    if mime == "application/pdf":
-        return _pdf_to_png(data)
-    return [_image_to_png(data)]
-
-
-def _image_to_png(data: bytes) -> bytes:
-    from PIL import Image, UnidentifiedImageError
-
-    try:
-        with Image.open(io.BytesIO(data)) as img:
-            # EXIF-поворот: фото с телефона часто лежит «на боку».
-            from PIL import ImageOps
-
-            img = ImageOps.exif_transpose(img)
-            img = img.convert("RGB")
-            img.thumbnail((_MAX_SIDE, _MAX_SIDE), Image.LANCZOS)
-            buf = io.BytesIO()
-            img.save(buf, format="PNG", optimize=True)
-            return buf.getvalue()
-    except (UnidentifiedImageError, OSError, ValueError) as exc:
-        raise OcrError(f"не удалось прочитать изображение: {exc}") from exc
-
-
-def _pdf_to_png(data: bytes) -> list[bytes]:
-    try:
-        import pypdfium2 as pdfium
-    except ImportError as exc:  # pragma: no cover
-        raise OcrError("pypdfium2 не установлен: PDF не поддержан") from exc
-
-    pages: list[bytes] = []
-    try:
-        doc = pdfium.PdfDocument(data)
-    except Exception as exc:
-        raise OcrError(f"не удалось открыть PDF: {exc}") from exc
-
-    try:
-        for index in range(min(len(doc), _MAX_PAGES)):
-            page = doc[index]
-            image = page.render(scale=_PDF_SCALE).to_pil()
-            image.thumbnail((_MAX_SIDE, _MAX_SIDE))
-            buf = io.BytesIO()
-            image.convert("RGB").save(buf, format="PNG", optimize=True)
-            pages.append(buf.getvalue())
-    except Exception as exc:
-        raise OcrError(f"не удалось отрендерить PDF: {exc}") from exc
-    finally:
-        doc.close()
-
-    if not pages:
-        raise OcrError("в PDF нет страниц")
-    return pages
-
-
-def _strip_front_matter(text: str) -> str:
-    """Отрезать YAML-блок, которым olmOCR предваряет текст страницы."""
-    stripped = text.strip()
-    if not stripped.startswith("---"):
-        return stripped
-
-    parts = stripped.split("---", 2)
-    # ["", "<yaml>", "<текст>"] — если закрывающего разделителя нет, не трогаем.
-    if len(parts) == 3:
-        return parts[2].strip()
-    return stripped
-
-
-async def ocr_text(image_bytes: bytes) -> str:
-    """Текст страницы от olmOCR. Адрес и модель — из env."""
-    if not settings.olmocr_server:
-        raise OcrError("OLMOCR_SERVER не задан: OCR недоступен")
-
-    base = settings.olmocr_server.rstrip("/")
-    # В env адрес уже с /v1 — не дублируем суффикс, если его забыли.
-    url = f"{base}/chat/completions" if base.endswith("/v1") else f"{base}/v1/chat/completions"
-
-    b64 = base64.b64encode(image_bytes).decode("ascii")
-    payload = {
-        "model": settings.olmocr_model,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": _OLMOCR_PROMPT},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{b64}"},
-                    },
-                ],
-            }
-        ],
-        "temperature": 0.0,
-        "max_tokens": 3000,
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=settings.model_timeout_s) as client:
-            resp = await client.post(url, json=payload)
-            resp.raise_for_status()
-    except httpx.HTTPError as exc:
-        raise OcrError(f"olmOCR недоступен: {describe_http_error(exc)}") from exc
-
-    try:
-        data = response_json(resp, "olmOCR")
-    except ProviderError as exc:
-        raise OcrError(str(exc)) from exc
-
-    try:
-        choice = data["choices"][0]
-        content = choice["message"]["content"]
-    except (KeyError, IndexError, TypeError) as exc:
-        raise OcrError(f"неожиданная форма ответа olmOCR: {str(data)[:300]}") from exc
-
-    if content is not None and not isinstance(content, str):
-        raise OcrError(f"olmOCR вернул content типа {type(content).__name__}")
-
-    if choice.get("finish_reason") == "length":
-        # Страница прочитана не до конца: поля из хвоста документа потеряны,
-        # а модель дальше «извлечёт» то, что осталось, и документ выглядел бы
-        # разобранным. Честная ошибка с retry лучше.
         raise OcrError(
-            "olmOCR обрезал текст страницы по лимиту токенов: "
-            "нужен retry или больший max_tokens"
+            "OCR: пустой файл",
+            retryable=False,
+            user_message="Файл пустой. Загрузите другое фото или скан.",
         )
 
-    # Сырой ответ нужен, чтобы сверить разбор с тем, что реально отдаёт сервер.
-    # В нём персональные данные, поэтому только DEBUG (settings.debug).
-    log.debug("olmOCR raw response: %r", content)
+    mime = sniff_mime(data)
+    filename = "document" + _EXT_BY_MIME.get(mime, "")
 
-    return _strip_front_matter(content or "")
+    try:
+        # Таймаут с запасом над дедлайном самого сервиса (240 с): иначе мы
+        # оборвали бы запрос раньше, чем он вернёт осмысленный 504.
+        async with httpx.AsyncClient(timeout=settings.ocr_timeout_s) as client:
+            resp = await client.post(
+                _service_url(),
+                headers=_headers(),
+                files={"file": (filename, data, mime)},
+            )
+    except httpx.HTTPError as exc:
+        raise OcrError(
+            f"OCR недоступен: {describe_http_error(exc)}",
+            retryable=True,
+            user_message=_SERVICE_DOWN,
+        ) from exc
+
+    if resp.status_code != 200:
+        raise _error_for_status(resp.status_code, _detail(resp))
+
+    # Сырой ответ нужен, чтобы сверить разбор с тем, что реально отдаёт сервис.
+    # В нём персональные данные, поэтому только DEBUG (settings.debug).
+    log.debug("OCR raw response: %r", resp.text)
+
+    text = (resp.text or "").strip()
+    if not text:
+        raise OcrError(
+            "OCR вернул пустой текст: на изображении не нашли текста",
+            retryable=False,
+            user_message="На фото не удалось найти текст. "
+            "Загрузите более чёткое фото документа.",
+        )
+    return text

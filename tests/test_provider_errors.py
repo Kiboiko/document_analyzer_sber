@@ -18,7 +18,8 @@ import os
 import sys
 
 # Не зависим от локального .env: переменные процесса приоритетнее.
-os.environ["OLMOCR_SERVER"] = "http://olmocr.test/v1"
+os.environ["OCR_SERVICE_URL"] = "http://ocr.test"
+os.environ["OCR_CLIENT_TOKEN"] = "ocr-test-token"
 os.environ["ILONS_API_KEY"] = "test-key"
 os.environ["LLM_BASE_URL"] = "https://llm.test"
 os.environ["OLLAMA_HOST"] = "http://ollama.test:11434"
@@ -108,26 +109,41 @@ def scenario(provider, kind, request):
     raise AssertionError(kind)
 
 
+def ocr_response(kind, request):
+    """Ответ (или исключение) подставного OCR-сервиса. Коды — как у ocr.ilons.ru."""
+    match kind:
+        case "timeout":
+            raise httpx.ReadTimeout("", request=request)
+        case "connect":
+            raise httpx.ConnectError("connection refused", request=request)
+        case "http400":
+            return httpx.Response(400, json={"detail": "uploaded file is not a readable PDF"})
+        case "http401":
+            return httpx.Response(401, json={"detail": "invalid token"})
+        case "http413":
+            return httpx.Response(413, json={"detail": "file too large"})
+        case "http502":
+            return httpx.Response(502, json={"detail": "vLLM error"})
+        case "http504":
+            return httpx.Response(504, json={"detail": "OCR timed out"})
+        case "http500":
+            return httpx.Response(500, text="internal error")
+        case "http404":
+            return httpx.Response(404, json={"detail": "Not Found"})
+        case "http502_html":
+            return httpx.Response(502, text="<html>Bad Gateway</html>",
+                                  headers={"content-type": "text/html"})
+        case "empty_text":
+            return httpx.Response(200, text="   ",
+                                  headers={"content-type": "text/markdown"})
+    return httpx.Response(200, text=OCR_TEXT,
+                          headers={"content-type": "text/markdown; charset=utf-8"})
+
+
 def make_handler(provider, kind=None, ocr_kind=None):
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.host == "olmocr.test":
-            match ocr_kind:
-                case "timeout":
-                    raise httpx.ReadTimeout("", request=request)
-                case "http500":
-                    return httpx.Response(500, text="vllm down")
-                case "html200":
-                    return httpx.Response(200, text="<html>nginx</html>")
-                case "length":
-                    return httpx.Response(200, json={"choices": [
-                        {"message": {"content": "Серия 45"}, "finish_reason": "length"}]})
-                case "no_choices":
-                    return httpx.Response(200, json={"choices": []})
-                case "empty_text":
-                    return httpx.Response(200, json={"choices": [
-                        {"message": {"content": ""}, "finish_reason": "stop"}]})
-            return httpx.Response(200, json={"choices": [
-                {"message": {"content": OCR_TEXT}, "finish_reason": "stop"}]})
+        if request.url.host == "ocr.test":
+            return ocr_response(ocr_kind, request)
         return scenario(provider, kind, request)
     return handler
 
@@ -189,37 +205,79 @@ async def main():
                 f"{provider}: {kind}", make_handler(provider, kind), needle)
     settings.model_provider = "cloud"
 
-    print("\n=== olmOCR")
-    for kind, needle in [("timeout", "таймаут"), ("http500", "HTTP 500"),
-                         ("html200", "не JSON"), ("length", "обрезал"),
-                         ("no_choices", "неожиданная форма")]:
-        await expect_provider_error(
-            f"olmOCR: {kind}", make_handler("cloud", "prose", ocr_kind=kind), needle)
+    print("\n=== OCR-сервис: каждый код -> понятная ошибка с признаками для воркера")
+    # (сценарий, что должно быть в тексте для журнала, имеет ли смысл повтор)
+    ocr_cases = [
+        ("http400", "HTTP 400", False),       # нечитаемый файл
+        ("http401", "OCR_CLIENT_TOKEN", False),
+        ("http413", "HTTP 413", False),
+        ("http502", "HTTP 502", True),         # ошибка vLLM у них
+        ("http504", "HTTP 504", True),         # их дедлайн
+        ("http500", "HTTP 500", True),
+        ("http502_html", "HTTP 502", True),    # шлюз вместо JSON
+        ("http404", "HTTP 404", False),        # неверный OCR_SERVICE_URL
+        ("timeout", "таймаут", True),
+        ("connect", "ConnectError", True),
+        ("empty_text", "пустой текст", False),
+    ]
+    # Технические детали не должны попадать к соискателю.
+    internals = ("HTTP", "vLLM", "PDF", "OCR_", "ocr.", "token", "Token")
+    for kind, needle, retryable in ocr_cases:
+        llm_calls = []
+        inner = make_handler("cloud", "prose", ocr_kind=kind)
+
+        def watcher(request, inner=inner, llm_calls=llm_calls):
+            if request.url.host != "ocr.test":
+                llm_calls.append(request.url.host)
+            return inner(request)
+
+        try:
+            with patched(watcher):
+                await recognize(DocType.PASSPORT_RF, jpeg())
+            check(f"OCR {kind}: исключения не было", False)
+            continue
+        except OcrError as exc:
+            title = f"OCR {kind}"
+            check(f"{title}: OcrError с причиной", needle.lower() in str(exc).lower(),
+                  str(exc)[:90])
+            check(f"{title}: retryable={retryable}", exc.retryable is retryable,
+                  str(exc.retryable))
+            msg = exc.user_message or ""
+            check(f"{title}: есть текст для соискателя", len(msg) > 10, msg)
+            check(f"{title}: в нём нет технических деталей",
+                  not any(w in msg for w in internals), msg)
+            check(f"{title}: к LLM запрос не уходит", not llm_calls, str(llm_calls))
+        except Exception as exc:  # noqa: BLE001
+            check(f"OCR {kind}: OcrError", False, f"сырое {type(exc).__name__}: {str(exc)[:70]}")
+
+    print("\n=== OCR: пустой файл не отправляется на сервис")
+    sent = []
+
+    def spy(request):
+        sent.append(request.url.host)
+        return ocr_response(None, request)
+
     try:
-        with patched(make_handler("cloud", "prose", ocr_kind="http500")):
+        with patched(spy):
+            await recognize(DocType.PASSPORT_RF, b"")
+        check("пустой файл -> ошибка", False)
+    except OcrError as exc:
+        check("пустой файл -> OcrError, retryable=False", exc.retryable is False, str(exc))
+        check("пустой файл: запросов наружу нет", not sent, str(sent))
+
+    print("\n=== OCR: токен не попадает в сообщения об ошибках")
+    try:
+        with patched(make_handler("cloud", "prose", ocr_kind="http401")):
             await recognize(DocType.PASSPORT_RF, jpeg())
-    except OcrError:
-        check("ошибка OCR — это OcrError (подкласс ProviderError)", True)
-    except Exception as exc:  # noqa: BLE001
-        check("ошибка OCR — это OcrError (подкласс ProviderError)", False, type(exc).__name__)
-
-    # Пустой текст со всех страниц: LLM не должна вызываться вхолостую.
-    calls = []
-    inner = make_handler("cloud", "prose", ocr_kind="empty_text")
-
-    def watcher(request):
-        if request.url.host != "olmocr.test":
-            calls.append(request.url.host)
-        return inner(request)
-
-    await expect_provider_error("olmOCR: пустой текст -> ошибка", watcher, "ocr не вернул текста")
-    check("при пустом OCR запрос к LLM не отправляется", not calls, str(calls))
+    except OcrError as exc:
+        check("токен не утекает в текст ошибки",
+              "ocr-test-token" not in str(exc) and "ocr-test-token" not in (exc.user_message or ""))
 
     print("\n=== cloud: шлюз не знает response_format -> повтор без него")
     state = {"n": 0, "bodies": []}
 
     def retry_handler(request):
-        if request.url.host == "olmocr.test":
+        if request.url.host == "ocr.test":
             return make_handler("cloud", "prose")(request)
         state["n"] += 1
         state["bodies"].append(json.loads(request.content))
@@ -246,7 +304,7 @@ async def main():
     seen = {}
 
     def local_spy(request):
-        if request.url.host == "olmocr.test":
+        if request.url.host == "ocr.test":
             return make_handler("local", "prose")(request)
         seen["body"] = json.loads(request.content)
         return llm_ok("local", json.dumps(GOOD_FIELDS, ensure_ascii=False))
@@ -279,7 +337,7 @@ async def main():
             content = json.dumps(payload, ensure_ascii=False)
 
             def h(request, provider=provider, content=content):
-                if request.url.host == "olmocr.test":
+                if request.url.host == "ocr.test":
                     return make_handler(provider, "prose")(request)
                 return llm_ok(provider, content)
 

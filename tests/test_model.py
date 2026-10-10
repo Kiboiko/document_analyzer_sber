@@ -1,4 +1,4 @@
-"""Тест модельного слоя: реальный HTTP-код против подставных olmOCR и LLM."""
+"""Тест модельного слоя: реальный HTTP-код против подставных OCR-сервиса и LLM."""
 
 import asyncio
 import functools
@@ -10,7 +10,8 @@ import sys
 # Мок-тесты не должны зависеть от локального .env разработчика (там может быть
 # настоящий адрес сервера, ключ или MODEL_PROVIDER=local): переменные процесса
 # приоритетнее .env, поэтому задаём их жёстко, а не через setdefault.
-os.environ["OLMOCR_SERVER"] = "http://olmocr.test/v1"
+os.environ["OCR_SERVICE_URL"] = "http://ocr.test"
+os.environ["OCR_CLIENT_TOKEN"] = "ocr-test-token"
 os.environ["ILONS_API_KEY"] = "test-key"
 os.environ["LLM_BASE_URL"] = "https://llm.test"
 os.environ["MODEL_PROVIDER"] = "cloud"
@@ -22,7 +23,6 @@ from PIL import Image
 from app.config import settings
 from app.enums import DocType
 from app.model import recognize
-from app.model.ocr import OcrError, to_png_pages
 from app.model.providers import ProviderError
 
 OK, FAIL = [], []
@@ -45,18 +45,25 @@ def pdf() -> bytes:
     return buf.getvalue()
 
 
-PASSPORT_TEXT = """---
-primary_language: ru
-is_rotation_valid: true
----
-РОССИЙСКАЯ ФЕДЕРАЦИЯ
+# Так сервис отвечает на самом деле: чистый markdown, без служебной шапки
+# (проверено на ocr.ilons.ru).
+PASSPORT_TEXT = """РОССИЙСКАЯ ФЕДЕРАЦИЯ
+
 Серия 45 04  № 123456
+
 ИВАНОВ ИВАН ИВАНОВИЧ
+
 Дата рождения 01.01.1990
+
 Место рождения ГОР. МОСКВА
 """
 
 seen = {}
+
+
+def ocr_ok(text: str) -> httpx.Response:
+    return httpx.Response(
+        200, text=text, headers={"content-type": "text/markdown; charset=utf-8"})
 
 
 def make_transport(
@@ -66,7 +73,7 @@ def make_transport(
     finish_reason="stop",
     reasoning=None,
 ):
-    """Подставной сервер: отдельно olmOCR, отдельно LLM.
+    """Подставной сервер: отдельно OCR-сервис, отдельно LLM.
 
     `reasoning` имитирует reasoning-модель ilons: размышления приходят в
     отдельном поле, ответ — в content.
@@ -74,14 +81,11 @@ def make_transport(
 
     def handler(request: httpx.Request) -> httpx.Response:
         host = request.url.host
-        if host == "olmocr.test":
-            seen["ocr_request"] = json.loads(request.content)
+        if host == "ocr.test":
+            seen["ocr_request"] = request
             if ocr_status != 200:
-                return httpx.Response(ocr_status, text="boom")
-            return httpx.Response(
-                200,
-                json={"choices": [{"message": {"content": PASSPORT_TEXT}}]},
-            )
+                return httpx.Response(ocr_status, json={"detail": "boom"})
+            return ocr_ok(PASSPORT_TEXT)
         seen["llm_request"] = json.loads(request.content)
         seen["llm_auth"] = request.headers.get("authorization")
         if llm_status != 200:
@@ -110,22 +114,44 @@ def patch_httpx(transport):
 
 
 async def main():
-    print("\n1. Рендер входных файлов")
-    check("JPEG -> одна PNG-страница", len(to_png_pages(jpeg())) == 1)
-    check("PDF -> страницы отрендерены", len(to_png_pages(pdf())) >= 1)
-    try:
-        to_png_pages(b"\x00\x01\x02 not an image")
-        check("битый ввод -> OcrError", False, "исключения не было")
-    except OcrError as exc:
-        check("битый ввод -> OcrError, а не падение", True, str(exc)[:60])
-
-    print("\n2. Сквозной разбор: OCR -> LLM -> нормализованные поля")
     body = json.dumps({
         "series": "45 04", "number": "123456",
         "full_name": "ИВАНОВ ИВАН ИВАНОВИЧ",
         "birth_date": "1990-01-01", "birth_place": "ГОР. МОСКВА",
         "issued_by": None, "issue_date": None,
     }, ensure_ascii=False)
+
+    print("\n1. Файл уходит в OCR-сервис как есть")
+    for title, data, mime in [("JPEG", jpeg(), "image/jpeg"), ("PDF", pdf(), "application/pdf")]:
+        original = patch_httpx(make_transport(body))
+        try:
+            await recognize(DocType.PASSPORT_RF, data)
+        finally:
+            httpx.AsyncClient = original
+        req = seen["ocr_request"]
+        check(f"{title}: POST на /ocr", req.method == "POST" and req.url.path == "/ocr",
+              f"{req.method} {req.url.path}")
+        check(f"{title}: multipart/form-data",
+              req.headers["content-type"].startswith("multipart/form-data"))
+        check(f"{title}: поле называется file", b'name="file"' in req.content)
+        check(f"{title}: байты не изменены (без конвертации в PNG)", data in req.content)
+        check(f"{title}: тип части {mime}", f"Content-Type: {mime}".encode() in req.content)
+
+    print("\n1a. Токен сервиса")
+    check("токен задан -> заголовок X-API-Token",
+          seen["ocr_request"].headers.get("x-api-token") == "ocr-test-token",
+          str(seen["ocr_request"].headers.get("x-api-token")))
+    settings.ocr_client_token = ""
+    original = patch_httpx(make_transport(body))
+    try:
+        await recognize(DocType.PASSPORT_RF, jpeg())
+    finally:
+        httpx.AsyncClient = original
+        settings.ocr_client_token = "ocr-test-token"
+    check("токена нет -> заголовка нет (открытый доступ)",
+          "x-api-token" not in seen["ocr_request"].headers)
+
+    print("\n2. Сквозной разбор: OCR -> LLM -> нормализованные поля")
     original = patch_httpx(make_transport(body))
     try:
         res = await recognize(DocType.PASSPORT_RF, jpeg())
@@ -138,19 +164,12 @@ async def main():
     check("ненайденное поле осталось None", res.fields["issue_date"] is None)
     check("провайдер отмечен", res.provider == "cloud", res.provider)
     check("usage сохранён", res.usage.get("total_tokens") == 321, str(res.usage))
-    check("front matter olmOCR отрезан", not res.raw_text.startswith("---"),
+    check("текст OCR сохранён без изменений", res.raw_text == PASSPORT_TEXT.strip(),
           res.raw_text[:40])
-    check("в raw_text есть текст документа", "ИВАНОВ" in res.raw_text)
+    check("в usage указан OCR-сервис", res.usage.get("ocr_service") == "http://ocr.test",
+          str(res.usage.get("ocr_service")))
 
     print("\n3. Форма запросов к серверам")
-    ocr_req = seen["ocr_request"]
-    check("в olmOCR уходит модель из env",
-          ocr_req["model"] == settings.olmocr_model, ocr_req["model"])
-    content = ocr_req["messages"][0]["content"]
-    check("картинка уходит как data:image/png;base64",
-          any(p.get("type") == "image_url"
-              and p["image_url"]["url"].startswith("data:image/png;base64,")
-              for p in content))
     check("ключ ilons уходит в Authorization",
           seen["llm_auth"] == "Bearer test-key", str(seen["llm_auth"]))
     check("в LLM уходит промпт из prompts/",
@@ -189,9 +208,9 @@ async def main():
     original = patch_httpx(make_transport(body, ocr_status=500))
     try:
         await recognize(DocType.PASSPORT_RF, jpeg())
-        check("olmOCR 500 -> ProviderError", False, "исключения не было")
+        check("OCR 500 -> ProviderError", False, "исключения не было")
     except ProviderError as exc:
-        check("olmOCR 500 -> ProviderError", True, str(exc)[:60])
+        check("OCR 500 -> ProviderError", True, str(exc)[:60])
     finally:
         httpx.AsyncClient = original
 
@@ -288,8 +307,8 @@ async def main():
 
     print("\n6. Переключение провайдера только через env")
     def ollama_handler(request):
-        if request.url.host == "olmocr.test":
-            return httpx.Response(200, json={"choices": [{"message": {"content": PASSPORT_TEXT}}]})
+        if request.url.host == "ocr.test":
+            return ocr_ok(PASSPORT_TEXT)
         seen["ollama_path"] = request.url.path
         seen["ollama_body"] = json.loads(request.content)
         return httpx.Response(200, json={
@@ -314,8 +333,8 @@ async def main():
           f"{res.provider} {seen.get('ollama_path')}")
     check("Ollama просят вернуть JSON", seen["ollama_body"].get("format") == "json")
     check("поля разобраны локальной моделью", res.fields["number"] == "123456")
-    check("OCR остался self-hosted в local-режиме",
-          res.usage.get("ocr_model") == settings.olmocr_model)
+    check("OCR остался тем же сервисом в local-режиме",
+          res.usage.get("ocr_service") == "http://ocr.test")
 
     settings.model_provider = "нечто"
     seen.clear()
