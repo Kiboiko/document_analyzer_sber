@@ -48,6 +48,13 @@ class Settings(BaseSettings):
 
     # --- OIDC / Keycloak --------------------------------------------------- #
     oidc_issuer: str = "http://keycloak:8080/realms/docs"
+    #: Публичный адрес Keycloak для браузера (authorize/end_session), если
+    #: отличается от OIDC_ISSUER. Внутри docker-сети приложение обращается к
+    #: Keycloak по имени сервиса (`keycloak:8080`) — discovery и обмен кода
+    #: на токен это имя резолвят; браузер оператора на хосте — нет, поэтому
+    #: для редиректов подставляем этот адрес (например, `http://localhost:8080`).
+    #: Пусто — поведение не меняется (адреса совпадают).
+    oidc_public_issuer: str = ""
     oidc_client_id: str = "docs-app"
     oidc_client_secret: str = ""
     #: Внешний адрес приложения для redirect_uri.
