@@ -173,6 +173,8 @@ async def process_job(job: Job) -> None:
             await queue.mark_failed(session, job_id, "документ не найден", retry=False)
             return
 
+        # Соискатель и оператор должны видеть «разбирается», а не «в очереди».
+        document.status = DocStatus.PROCESSING
         await history.record(
             session, document.application_id, EventType.PARSE_STARTED, actor,
             document_id=document_id,
@@ -266,9 +268,32 @@ async def process_job(job: Job) -> None:
         await queue.mark_done(job_session, job_id)
 
 
+#: Задачи, которые этот процесс разбирает прямо сейчас (для пульса и штатной остановки).
+_in_flight: set[uuid.UUID] = set()
+
+
+async def _sleep_or_stop(stop: asyncio.Event, seconds: float) -> None:
+    try:
+        await asyncio.wait_for(stop.wait(), timeout=seconds)
+    except TimeoutError:
+        pass
+
+
+async def heartbeat_loop(stop: asyncio.Event) -> None:
+    """Продлевать блокировку своих задач, чтобы реапер не отобрал живой разбор."""
+    while not stop.is_set():
+        await _sleep_or_stop(stop, settings.job_heartbeat_s)
+        if _in_flight and not stop.is_set():
+            try:
+                async with session_factory() as session:
+                    await queue.heartbeat(session, list(_in_flight))
+            except Exception:
+                log.exception("не удалось продлить блокировку задач")
+
+
 async def reaper_loop(stop: asyncio.Event) -> None:
     """Периодически возвращать зависшие processing в pending."""
-    interval = max(settings.job_lock_timeout_s / 2, settings.worker_poll_interval_s)
+    interval = min(30.0, max(settings.job_lock_timeout_s / 3, settings.worker_poll_interval_s))
     while not stop.is_set():
         async with session_factory() as session:
             n = await queue.reap_stale(session)
@@ -285,10 +310,13 @@ async def worker_loop(stop: asyncio.Event) -> None:
     tasks: set[asyncio.Task] = set()
 
     async def _run(job: Job) -> None:
+        _in_flight.add(job.id)
         try:
             await process_job(job)
         except Exception:
             log.exception("process_job упал для job %s", job.id)
+        finally:
+            _in_flight.discard(job.id)
 
     while not stop.is_set():
         async with session_factory() as session:
@@ -305,11 +333,28 @@ async def worker_loop(stop: asyncio.Event) -> None:
         tasks.add(task)
         task.add_done_callback(tasks.discard)
 
-        if len(tasks) >= settings.worker_concurrency:
-            await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        # Все слоты заняты — ждём освобождения, но не дольше интервала опроса,
+        # чтобы сигнал остановки не ждал окончания долгого разбора.
+        while len(tasks) >= settings.worker_concurrency and not stop.is_set():
+            await asyncio.wait(
+                tasks,
+                timeout=settings.worker_poll_interval_s,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
 
+    # Штатная остановка (docker stop/restart): разбор длится десятки секунд, а
+    # Docker ждёт 10 с и добивает SIGKILL. Не ждём — прерываем и сразу
+    # возвращаем свои задачи в очередь, чтобы следующий запуск взял их без
+    # таймаута реапера.
+    unfinished = list(_in_flight)
+    for task in tasks:
+        task.cancel()
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
+    if unfinished:
+        async with session_factory() as session:
+            n = await queue.release(session, unfinished)
+        log.info("остановка: возвращено в очередь задач: %s", n)
 
 
 async def main() -> None:
@@ -323,11 +368,11 @@ async def main() -> None:
             pass  # Windows: сигналы недоступны через event loop
 
     async with session_factory() as session:
-        n = await queue.reap_stale(session)
+        n = await queue.reap_stale(session, own_worker_id=worker_id())
     log.info("воркер %s запущен (реапер вернул %s задач)", worker_id(), n)
 
     try:
-        await asyncio.gather(worker_loop(stop), reaper_loop(stop))
+        await asyncio.gather(worker_loop(stop), reaper_loop(stop), heartbeat_loop(stop))
     finally:
         await dispose_engine()
 

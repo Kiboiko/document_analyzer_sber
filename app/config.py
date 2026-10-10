@@ -99,8 +99,12 @@ class Settings(BaseSettings):
     worker_concurrency: int = 4
     #: Пауза между опросами очереди, секунды.
     worker_poll_interval_s: float = 2.0
-    #: Через сколько секунд `processing` считается зависшим и возвращается в `pending`.
-    job_lock_timeout_s: int = 300
+    #: Через сколько секунд без продления блокировки `processing` считается
+    #: зависшим и возвращается в `pending`. Живой воркер продлевает её каждые
+    #: JOB_HEARTBEAT_S, поэтому долгий разбор не отбирается.
+    job_lock_timeout_s: int = 90
+    #: Как часто воркер продлевает блокировку задач, которые сейчас разбирает.
+    job_heartbeat_s: int = 15
     #: Максимум попыток разбора одного документа.
     job_max_attempts: int = 3
 

@@ -9,12 +9,12 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.enums import JobStatus
-from app.models import Job
+from app.enums import DocStatus, JobStatus
+from app.models import Document, Job
 from app.schemas import QueueStats
 
 
@@ -104,24 +104,77 @@ async def mark_failed(
     await session.commit()
 
 
-async def reap_stale(session: AsyncSession) -> int:
+async def _back_to_queue(session: AsyncSession, jobs: list[Job]) -> None:
+    """Задачи — в pending, их документы — снова «в очереди», а не «разбирается»."""
+    for job in jobs:
+        job.status = JobStatus.PENDING
+        job.locked_at = None
+        job.worker_id = None
+    if jobs:
+        await session.execute(
+            update(Document)
+            .where(
+                Document.id.in_([j.document_id for j in jobs]),
+                Document.status == DocStatus.PROCESSING,
+            )
+            .values(status=DocStatus.ACCEPTED)
+        )
+
+
+async def reap_stale(session: AsyncSession, own_worker_id: str | None = None) -> int:
     """Вернуть зависшие processing в pending (attempts++). Вернуть число задач.
 
-    Запускается на старте воркера и периодически — так работа не теряется
-    при рестарте.
+    Зависшая — та, чей воркер перестал продлевать блокировку (`heartbeat`)
+    дольше JOB_LOCK_TIMEOUT_S. `own_worker_id` — на старте воркера: задачи с
+    тем же id остались от его прошлого запуска в этом же контейнере (hostname и
+    pid совпадают), их владелец точно мёртв — забираем сразу, без таймаута.
     """
     threshold = _utcnow() - timedelta(seconds=settings.job_lock_timeout_s)
+    stale = Job.locked_at < threshold
+    if own_worker_id:
+        stale = or_(stale, Job.worker_id == own_worker_id)
     stmt = (
         select(Job)
-        .where(Job.status == JobStatus.PROCESSING, Job.locked_at < threshold)
+        .where(Job.status == JobStatus.PROCESSING, stale)
         .with_for_update(skip_locked=True)
     )
     jobs = list((await session.scalars(stmt)).all())
     for job in jobs:
-        job.status = JobStatus.PENDING
         job.attempts += 1
-        job.locked_at = None
-        job.worker_id = None
+    await _back_to_queue(session, jobs)
+    await session.commit()
+    return len(jobs)
+
+
+async def heartbeat(session: AsyncSession, job_ids: list[uuid.UUID]) -> None:
+    """Продлить блокировку задач, которые воркер сейчас разбирает."""
+    if not job_ids:
+        return
+    await session.execute(
+        update(Job)
+        .where(Job.id.in_(job_ids), Job.status == JobStatus.PROCESSING)
+        .values(locked_at=_utcnow())
+    )
+    await session.commit()
+
+
+async def release(session: AsyncSession, job_ids: list[uuid.UUID]) -> int:
+    """Вернуть свои незаконченные задачи в очередь при штатной остановке.
+
+    Попытку не списываем: разбор прервали мы, а не сбой модели.
+    """
+    if not job_ids:
+        return 0
+    jobs = list(
+        (
+            await session.scalars(
+                select(Job).where(
+                    Job.id.in_(job_ids), Job.status == JobStatus.PROCESSING
+                )
+            )
+        ).all()
+    )
+    await _back_to_queue(session, jobs)
     await session.commit()
     return len(jobs)
 
