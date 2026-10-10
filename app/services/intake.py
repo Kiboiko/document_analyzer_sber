@@ -287,7 +287,12 @@ async def refresh_application_status(
     NB(Кирилл): позови это в `worker.process_job` после выставления статуса
     документа, иначе фильтр по статусу заявки в кабинете будет отставать.
     Коммит — за вызывающим.
+
+    Сессия без autoflush (TZ: `app/db.py`), поэтому перед select явный flush:
+    иначе запрос ниже не увидит только что выставленный document.status и
+    заявка навсегда застрянет в processing, даже когда все документы готовы.
     """
+    await session.flush()
     statuses = (
         await session.execute(
             select(Document.doc_type, Document.status).where(

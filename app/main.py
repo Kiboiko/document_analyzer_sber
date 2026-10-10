@@ -10,6 +10,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.sessions import SessionMiddleware
 
 from app.config import settings
 from app.db import create_all, dispose_engine
@@ -46,6 +47,9 @@ app = FastAPI(
 
 app.state.templates = templates
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+
+# Сессия кабинета (OIDC): подписанная cookie, секрет — SESSION_SECRET.
+app.add_middleware(SessionMiddleware, secret_key=settings.session_secret, same_site="lax")
 
 # Роуты: публичная часть, кабинет оператора, админ, OIDC.
 app.include_router(auth.router)

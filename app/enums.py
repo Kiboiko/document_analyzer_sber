@@ -174,6 +174,21 @@ class EventType(StrEnum):
     DOCUMENT_FLAGGED = "document_flagged"
 
 
+#: Подписи событий для таймлайна в карточке оператора (TZ 9).
+EVENT_TYPE_TITLES: dict[EventType, str] = {
+    EventType.APPLICATION_CREATED: "Заявка создана",
+    EventType.FILES_UPLOADED: "Файлы загружены",
+    EventType.FILE_ACCEPTED: "Файл принят",
+    EventType.FILE_REJECTED: "Файл отклонён",
+    EventType.PARSE_STARTED: "Разбор начат",
+    EventType.PARSE_DONE: "Разбор завершён",
+    EventType.PARSE_FAILED: "Разбор не удался",
+    EventType.FIELD_CORRECTED: "Поле исправлено оператором",
+    EventType.REPARSE_REQUESTED: "Запрошен повторный разбор",
+    EventType.DOCUMENT_FLAGGED: "Документ помечен замечанием",
+}
+
+
 class CrossCheckKind(StrEnum):
     """Что сопоставляем между документами заявки (TZ 8)."""
 
