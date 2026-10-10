@@ -1,7 +1,7 @@
 """Local-LLM: Ollama (OLLAMA_HOST, LOCAL_VLM_MODEL) — вариант on-prem (TZ 7).
 
 Переключение: MODEL_PROVIDER=local. Инструкция — docs/LOCAL_MODEL.md.
-OCR в обоих вариантах остаётся self-hosted (olmOCR); локально заменяется
+OCR в обоих вариантах один и тот же сервис (OCR_SERVICE_URL); локально заменяется
 только LLM — на вход так же приходит текст, а не картинка.
 """
 
@@ -12,7 +12,13 @@ import logging
 import httpx
 
 from app.config import settings
-from app.model.providers import LLMResult, ProviderError, parse_json_object
+from app.model.providers import (
+    LLMResult,
+    ProviderError,
+    describe_http_error,
+    parse_json_object,
+    response_json,
+)
 
 log = logging.getLogger(__name__)
 
@@ -35,9 +41,9 @@ async def list_models() -> list[str]:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.get(f"{_base_url()}/api/tags")
             resp.raise_for_status()
-            data = resp.json()
     except httpx.HTTPError as exc:
-        raise ProviderError(f"Ollama /api/tags недоступен: {exc}") from exc
+        raise ProviderError(f"Ollama /api/tags: {describe_http_error(exc)}") from exc
+    data = response_json(resp, "Ollama /api/tags")
 
     return [m.get("name", "") for m in data.get("models", []) if m.get("name")]
 
@@ -56,20 +62,42 @@ async def complete_json(prompt: str, text: str) -> LLMResult:
         ],
         "stream": False,
         "format": "json",
-        "options": {"temperature": 0.0},
+        # Лимит на ответ: без него бредящая модель может писать до упора
+        # контекста. Тот же бюджет, что и у cloud.
+        "options": {"temperature": 0.0, "num_predict": settings.llm_max_tokens},
     }
 
     try:
         async with httpx.AsyncClient(timeout=settings.model_timeout_s) as client:
             resp = await client.post(f"{_base_url()}/api/chat", json=payload)
             resp.raise_for_status()
-            data = resp.json()
     except httpx.HTTPError as exc:
-        raise ProviderError(f"Ollama /api/chat: {exc}") from exc
+        raise ProviderError(f"Ollama /api/chat: {describe_http_error(exc)}") from exc
+    data = response_json(resp, "Ollama /api/chat")
 
-    content = (data.get("message") or {}).get("content")
+    if data.get("error"):
+        # Ollama иногда отвечает 200 с текстом ошибки в теле.
+        raise ProviderError(f"Ollama /api/chat: {str(data['error'])[:300]}")
+
+    message = data.get("message")
+    raw_content = message.get("content") if isinstance(message, dict) else None
+    content = raw_content.strip() if isinstance(raw_content, str) else ""
+    done_reason = data.get("done_reason")
+
     if not content:
-        raise ProviderError(f"неожиданная форма ответа Ollama: {data}")
+        raise ProviderError(
+            "Ollama вернул пустой content"
+            + (f" (done_reason={done_reason})" if done_reason else "")
+            + ": модель не дала ответа, нужен retry"
+        )
+
+    if done_reason == "length":
+        # Как и у cloud: обрезанный JSON может разобраться, но часть полей
+        # потеряна, а неполный документ хуже честной ошибки.
+        raise ProviderError(
+            f"Ollama обрезал ответ по лимиту токенов (num_predict="
+            f"{settings.llm_max_tokens}): нужен retry или больший LLM_MAX_TOKENS"
+        )
 
     return LLMResult(
         fields=parse_json_object(content),

@@ -10,7 +10,13 @@ import logging
 import httpx
 
 from app.config import settings
-from app.model.providers import LLMResult, ProviderError, parse_json_object
+from app.model.providers import (
+    LLMResult,
+    ProviderError,
+    describe_http_error,
+    parse_json_object,
+    response_json,
+)
 
 log = logging.getLogger(__name__)
 
@@ -48,9 +54,9 @@ async def list_models() -> list[str]:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.get(url, headers=_headers())
             resp.raise_for_status()
-            data = resp.json()
     except httpx.HTTPError as exc:
-        raise ProviderError(f"ilons /v1/models недоступен: {exc}") from exc
+        raise ProviderError(f"ilons /v1/models: {describe_http_error(exc)}") from exc
+    data = response_json(resp, "ilons /v1/models")
 
     return [item.get("id", "") for item in data.get("data", []) if item.get("id")]
 
@@ -82,20 +88,27 @@ async def complete_json(prompt: str, text: str) -> LLMResult:
                 payload.pop("response_format")
                 resp = await client.post(url, headers=_headers(), json=payload)
             resp.raise_for_status()
-            data = resp.json()
     except httpx.HTTPError as exc:
-        raise ProviderError(f"ilons chat/completions: {exc}") from exc
+        raise ProviderError(
+            f"ilons chat/completions: {describe_http_error(exc)}"
+        ) from exc
+    data = response_json(resp, "ilons chat/completions")
 
     try:
         choice = data["choices"][0]
         message = choice["message"]
+        if not isinstance(message, dict):
+            raise TypeError("message не объект")
     except (KeyError, IndexError, TypeError) as exc:
-        raise ProviderError(f"неожиданная форма ответа ilons: {data}") from exc
+        raise ProviderError(
+            f"неожиданная форма ответа ilons: {str(data)[:300]}"
+        ) from exc
 
     # Ответ берём только из content. reasoning_content — это размышления
     # модели, в них есть и черновые варианты полей, и JSON-подобный мусор;
     # разбирать их как результат нельзя.
-    content = (message.get("content") or "").strip()
+    raw_content = message.get("content")
+    content = raw_content.strip() if isinstance(raw_content, str) else ""
     finish = choice.get("finish_reason")
 
     if not content:

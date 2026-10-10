@@ -9,12 +9,11 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import HTMLResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.config import settings
 from app.db import get_session
 from app.enums import (
     DOC_TYPE_TITLES,
@@ -29,7 +28,7 @@ from app.enums import (
     Role,
 )
 from app.model import validate
-from app.models import Application, CrossCheck, Document, Field, File
+from app.models import Application, CrossCheck, Document, Field
 from app.routers.auth import current_user
 from app.schemas import (
     ApplicationCard,
@@ -339,26 +338,3 @@ async def queue_stats(
 ) -> QueueStats:
     """Счётчики очереди: ждёт / в разборе / среднее время."""
     return await queue.stats(session)
-
-
-@router.get("/api/operator/documents/{document_id}/files/{file_id}")
-async def get_document_file(
-    document_id: uuid.UUID,
-    file_id: uuid.UUID,
-    user: CurrentUser = Depends(require_operator),
-    session: AsyncSession = Depends(get_session),
-) -> FileResponse:
-    """Оригинал файла для карточки «оригинал рядом с полями» (TZ 1).
-
-    За входом (require_operator), а не по прямой ссылке — PII без входа
-    не отдаём.
-    """
-    file = await session.get(File, file_id)
-    if file is None or file.document_id != document_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "файл не найден")
-
-    path = settings.storage_dir / file.stored_path
-    if not path.is_file():
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "файл отсутствует в хранилище")
-
-    return FileResponse(path, media_type=file.mime, filename=file.orig_name)

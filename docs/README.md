@@ -4,7 +4,8 @@ TODO(заполнять по ходу, не в конце — Д10).
 
 ## 1. Окружение
 1. `cp .env.example .env` и заполнить значения (ключи — не в git).
-2. `OLMOCR_SERVER` — адрес выданного vLLM с olmOCR, с суффиксом `/v1`.
+2. OCR: по умолчанию `OCR_SERVICE_URL=https://ocr.ilons.ru`. `OCR_CLIENT_TOKEN`
+   нужен, только если сервис закрыт. Проверка: `curl https://ocr.ilons.ru/health`.
 3. `MODEL_PROVIDER=cloud` для внешнего Qwen, `local` — для Ollama
    (см. `LOCAL_MODEL.md`).
 

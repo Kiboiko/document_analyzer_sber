@@ -1,7 +1,7 @@
 """Модельный слой — единственная точка вызова модели (TZ 7).
 
 Контракт: `recognize(doc_type, image_bytes) -> ExtractResult`.
-Шаги: step1 OCR (olmOCR -> текст), step2 LLM извлекает JSON по промпту
+Шаги: step1 OCR (HTTP-сервис -> текст), step2 LLM извлекает JSON по промпту
 `prompts/<doc_type>.txt`. Провайдер LLM выбирается `MODEL_PROVIDER` из env,
 не константой в коде. Валидация полей — в `validate.py`, не в промпте.
 """
@@ -110,19 +110,9 @@ async def recognize(doc_type: DocType, image_bytes: bytes) -> ExtractResult:
     provider = get_provider()
     prompt = load_prompt(doc_type)
 
-    mime = ocr.sniff_mime(image_bytes)
-    pages = ocr.to_png_pages(image_bytes, mime)
-
-    # Страницы читаем последовательно: olmOCR один на всю команду, забивать
-    # его параллельными запросами одного документа не стоит — параллельность
-    # между документами уже даёт семафор воркера.
-    texts: list[str] = []
-    for page in pages:
-        texts.append(await ocr.ocr_text(page))
-
-    raw_text = "\n\n".join(part for part in texts if part).strip()
-    if not raw_text:
-        raise ProviderError("OCR не вернул текста: вероятно, нечитаемое фото")
+    # Файл уходит в OCR как есть: рендер страниц и приведение к PDF делает
+    # сам сервис. Пустой текст он здесь же превращает в OcrError.
+    raw_text = await ocr.ocr_document(image_bytes)
 
     result = await provider.complete_json(prompt, raw_text)
 
@@ -135,8 +125,7 @@ async def recognize(doc_type: DocType, image_bytes: bytes) -> ExtractResult:
         usage={
             **result.usage,
             "model": result.model,
-            "ocr_model": settings.olmocr_model,
-            "pages": len(pages),
+            "ocr_service": settings.ocr_service_url,
         },
         confidence=confidence,
     )

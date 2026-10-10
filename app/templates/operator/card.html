@@ -92,7 +92,7 @@
               <div class="document-originals" aria-label="Оригиналы файлов">
                 {% for file in document.files %}
                   <figure class="original-file">
-                    {% set file_url = "/api/operator/documents/" ~ document.id ~ "/files/" ~ file.id %}
+                    {% set file_url = "/api/operator/applications/" ~ card.id ~ "/documents/" ~ document.id ~ "/files/" ~ file.id %}
                     {% if file.mime.startswith("image/") %}
                       <a href="{{ file_url }}" target="_blank" rel="noopener">
                         <img src="{{ file_url }}" alt="{{ file.orig_name }}" loading="lazy">

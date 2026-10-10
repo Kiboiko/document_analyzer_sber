@@ -13,7 +13,7 @@
 - Фронт: FastAPI + Jinja2 + htmx (минимум JS, статусы без ручного обновления).
 - Auth: Keycloak (OIDC, Authorization Code). Роли `admin`, `operator`.
   Соискатель — без входа, доступ к своей заявке по невычисляемому токену.
-- Модель: OCR = self-hosted olmOCR (vLLM) по `OLMOCR_SERVER`; LLM = Qwen (внешний
+- Модель: OCR = HTTP-сервис организаторов по `OCR_SERVICE_URL` (за ним olmOCR); LLM = Qwen (внешний
   API ilons) или локальный (Ollama). Все вызовы — только в `app/model/`.
 - Инфра: docker-compose (postgres, keycloak, app, worker; профиль ollama).
 
@@ -27,7 +27,7 @@ flowchart LR
   API -->|enqueue| JOBS[(jobs в БД)]
   W[worker-процесс] -->|SKIP LOCKED| JOBS
   W --> M[app.model.recognize]
-  M --> OCR[olmOCR vLLM\nOLMOCR_SERVER]
+  M --> OCR[OCR-сервис\nOCR_SERVICE_URL]
   M --> LLM[Qwen: ilons API\nили Ollama local]
   W --> DB
   API -->|poll/htmx| A
@@ -55,7 +55,7 @@ app/
     keycloak.py      # admin-token, создание пользователя + роль operator
   model/
     __init__.py      # recognize(doc_type, image_bytes) -> ExtractResult
-    ocr.py           # клиент olmOCR (рендер PNG, вызов vLLM, текст)
+    ocr.py           # клиент HTTP-сервиса OCR (файл как есть -> текст markdown)
     providers/cloud.py  # LLM через ilons Qwen
     providers/local.py  # LLM/VLM через Ollama
     prompts/<doc_type>.txt
@@ -86,8 +86,9 @@ async def recognize(doc_type: DocType, image_bytes: bytes) -> ExtractResult: ...
 ```
 DATABASE_URL=postgresql+asyncpg://app:app@postgres:5432/app
 MODEL_PROVIDER=cloud            # cloud | local
-OLMOCR_SERVER=                  # адрес выданного vLLM с olmOCR, /v1
-OLMOCR_MODEL=allenai/olmOCR-2-7B-1025-FP8
+OCR_SERVICE_URL=                # по умолчанию https://ocr.ilons.ru
+OCR_CLIENT_TOKEN=               # X-API-Token; пусто = открытый доступ
+OCR_TIMEOUT_S=                  # >= 300 (дедлайн сервиса 240 с)
 LLM_BASE_URL=https://llm.ilons.ru
 ILONS_API_KEY=                  # внешний ключ, в репо НЕ класть
 LLM_MODEL=Qwen/Qwen3.8-27B      # сверить с /v1/models!

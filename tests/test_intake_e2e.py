@@ -11,6 +11,10 @@ import httpx
 from PIL import Image
 from sqlalchemy import select, text
 
+from _safety import require_throwaway_db
+
+require_throwaway_db()
+
 from app.db import create_all, engine, session_factory
 from app.main import app
 from app.models import Document, Event, File, Job
