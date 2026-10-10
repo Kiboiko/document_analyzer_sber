@@ -194,6 +194,7 @@ async def page_application(
             "max_mb": settings.max_upload_mb,
             "max_files": settings.max_files_per_request,
             "error": request.query_params.get("error"),
+            "upload_report": request.session.pop("upload_report", None),
             "keep_polling": _keep_polling(status),
         },
     )
@@ -272,16 +273,21 @@ async def upload_documents(
 
 @router.post("/a/{applicant_token}/upload")
 async def upload_from_form(
+    request: Request,
     applicant_token: uuid.UUID,
     doc_type: DocType = Form(...),
     files: list[UploadFile] = File(default_factory=list),
     session: AsyncSession = Depends(get_session),
 ) -> RedirectResponse:
-    """Загрузка из формы страницы соискателя (браузер без JS)."""
+    """Загрузка из формы страницы соискателя (браузер без JS).
+
+    Итог приёма (что принято, что уже было, что отклонено и почему) кладём в
+    подписанную сессию: так его нельзя подделать ссылкой с параметром.
+    """
     application = await _load_by_token(session, applicant_token)
 
     try:
-        await intake.accept_files(
+        result = await intake.accept_files(
             session,
             application.id,
             doc_type,
@@ -294,6 +300,12 @@ async def upload_from_form(
             url=f"/a/{applicant_token}?error={quote(str(exc))}", status_code=303
         )
 
+    request.session["upload_report"] = {
+        "doc_title": DOC_TYPE_TITLES[doc_type],
+        "accepted": len(result.accepted),
+        "duplicates": [f.orig_name for f in result.duplicates],
+        "rejected": [{"name": r.orig_name, "reason": r.reason} for r in result.rejected],
+    }
     return RedirectResponse(url=f"/a/{applicant_token}", status_code=303)
 
 

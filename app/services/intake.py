@@ -182,6 +182,7 @@ async def accept_files(
 
     document = await get_or_create_document(session, application_id, doc_type)
     known = await _known_hashes(session, document.id)
+    had_files = bool(known)
 
     accepted: list[FileOut] = []
     duplicates: list[FileOut] = []
@@ -257,6 +258,13 @@ async def accept_files(
         document.status = DocStatus.ACCEPTED
         document.error_reason = None
         await queue.enqueue(session, document.id)
+    elif not had_files:
+        # Ни одного файла в документе так и не появилось: без задачи он висел
+        # бы «в очереди» вечно. Показываем честный отказ с причиной.
+        document.status = DocStatus.ERROR
+        document.error_reason = "Файлы не приняты: " + "; ".join(
+            f"{r.orig_name} — {r.reason}" for r in rejected
+        )
 
     await refresh_application_status(session, application)
     await session.commit()

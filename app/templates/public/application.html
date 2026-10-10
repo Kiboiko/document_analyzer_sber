@@ -29,6 +29,24 @@
   <p class="callout callout-error">{{ error }}</p>
 {% endif %}
 
+{% if upload_report %}
+  {% set r = upload_report %}
+  <div class="callout {{ 'callout-error' if r.rejected and not r.accepted else ('callout-warn' if r.rejected or r.duplicates else 'callout-ok') }}" role="status">
+    <strong>{{ r.doc_title }}:</strong>
+    {% if r.accepted %}принято файлов — {{ r.accepted }}, начинаем распознавание.{% endif %}
+    {% if r.duplicates %}
+      <br>Уже были загружены раньше, повторно не принимаем: {{ r.duplicates | join(', ') }}.
+    {% endif %}
+    {% if r.rejected %}
+      <br>Не приняты:
+      <ul class="reject-list">
+        {% for item in r.rejected %}<li>{{ item.name }} — {{ item.reason }}</li>{% endfor %}
+      </ul>
+      Загрузите эти файлы в подходящем виде ещё раз.
+    {% endif %}
+  </div>
+{% endif %}
+
 <h2>Шаг 2. Загрузите фото документов</h2>
 <p class="hint">
   Снимайте документ целиком, при хорошем свете, без бликов и пальцев на тексте.

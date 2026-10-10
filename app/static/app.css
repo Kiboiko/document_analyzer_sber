@@ -159,6 +159,7 @@ legend { font-weight: 700; font-size: 1.05rem; padding: 0 0 4px; }
 .choice-docs { display: block; color: var(--muted); font-size: .9rem; }
 
 .copy-row { display: flex; gap: 8px; margin-top: 10px; }
+.reject-list { margin: 4px 0; padding-left: 20px; }
 .copy-row input { font-size: .88rem; color: var(--muted); }
 
 .upload-list { display: grid; gap: 12px; }

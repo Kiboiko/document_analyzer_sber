@@ -6,6 +6,7 @@
 import asyncio
 import io
 import sys
+import uuid
 
 import httpx
 from PIL import Image
@@ -148,6 +149,39 @@ async def main():
         check("поллинг включён, пока документ не разобран", "every 3s" in r.text)
         r = await c.get("/a/00000000-0000-0000-0000-000000000000")
         check("страница по чужому токену -> 404", r.status_code == 404, str(r.status_code))
+
+        print("\n9. Все файлы отклонены — документ не висит «в очереди»")
+        r = await c.post(
+            f"/api/applications/{app_id}/documents",
+            params={"applicant_token": token},
+            data={"doc_type": "snils"},
+            files=[("files", ("snils.exe", b"MZ\x90\x00" + b"\x00" * 500, "image/jpeg"))],
+        )
+        up4 = r.json()
+        check("документ без принятых файлов -> error, а не accepted",
+              up4["status"] == "error", up4["status"])
+        async with session_factory() as s:
+            snils = await s.get(Document, uuid.UUID(up4["document_id"]))
+            check("причина отказа видна соискателю",
+                  bool(snils and snils.error_reason and "snils.exe" in snils.error_reason),
+                  snils.error_reason if snils else "")
+            snils_jobs = (await s.scalars(select(Job).where(Job.document_id == snils.id))).all()
+            check("задача на разбор не поставлена", not snils_jobs, f"задач={len(snils_jobs)}")
+
+        print("\n10. Итог загрузки из формы виден соискателю")
+        r = await c.post(
+            f"/a/{token}/upload",
+            data={"doc_type": "inn"},
+            files=[("files", ("inn.jpg", jpeg("blue"), "image/jpeg")),
+                   ("files", ("inn.exe", b"MZ\x90\x00" + b"\x00" * 500, "image/jpeg"))],
+        )
+        check("форма -> 303 на страницу заявки", r.status_code == 303, str(r.status_code))
+        r = await c.get(f"/a/{token}")
+        check("на странице: сколько принято", "принято файлов — 1" in r.text)
+        check("на странице: какой файл отклонён и почему",
+              "inn.exe" in r.text and "неподдерживаемый формат" in r.text)
+        r = await c.get(f"/a/{token}")
+        check("итог показывается один раз", "inn.exe" not in r.text)
 
     await engine.dispose()
 
