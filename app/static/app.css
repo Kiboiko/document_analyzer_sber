@@ -379,6 +379,13 @@ a:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 
+/* Причина отказа — с новой строки: .timeline-item это flex-контейнер. */
+.timeline-reason {
+  flex-basis: 100%;
+  margin: 2px 0 0;
+  color: #b45309;
+}
+
 .queue-counters,
 .queue-details {
   display: grid;
