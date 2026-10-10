@@ -70,6 +70,10 @@ keycloak/realm-export.json   # realm, роли, стартовый админ
 
 ## Контракт модельного слоя (единственная точка вызова модели)
 ```python
+## LLM Qwen (ilons) — reasoning-модель
+cloud.py: брать message.content (не reasoning_content); max_tokens 1500-2000;
+проверять finish_reason != "length" и content не пустой, иначе retry/ошибка;
+temperature=0; парсить первый JSON-объект из content.
 # app/model/__init__.py
 async def recognize(doc_type: DocType, image_bytes: bytes) -> ExtractResult: ...
 # ExtractResult: {fields: {name: value}, raw_text: str, provider: str, usage: {...}}
@@ -96,6 +100,8 @@ KEYCLOAK_ADMIN_URL=http://keycloak:8080
 STORAGE_DIR=./data/files
 MAX_UPLOAD_MB=20
 MAX_FILES_PER_REQUEST=30
+
+
 ```
 
 ## Железные правила (иначе снятие с конкурса / потеря допуска)
