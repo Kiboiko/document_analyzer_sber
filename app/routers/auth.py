@@ -85,9 +85,9 @@ async def callback(
     # id_token подписан с iss того адреса, через который прошёл браузер
     # (может быть OIDC_PUBLIC_ISSUER, а не внутренний OIDC_ISSUER) — разрешаем
     # оба варианта, остальные проверки (подпись, aud, exp, nonce) не меняются.
-    allowed_iss = {settings.oidc_issuer}
-    if settings.oidc_public_issuer:
-        allowed_iss.add(settings.oidc_public_issuer)
+    # OIDC_PUBLIC_ISSUER задают и как хост (`http://localhost:8080`), и как
+    # полный issuer — берём путь realm из внутреннего адреса в обоих случаях.
+    allowed_iss = {settings.oidc_issuer, _public_url(settings.oidc_issuer)}
     token = await oauth.keycloak.authorize_access_token(
         request, claims_options={"iss": {"values": list(allowed_iss)}}
     )
