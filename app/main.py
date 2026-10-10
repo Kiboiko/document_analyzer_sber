@@ -13,7 +13,7 @@ from fastapi.templating import Jinja2Templates
 
 from app.config import settings
 from app.db import create_all, dispose_engine
-from app.routers import admin, auth, operator, public
+from app.routers import admin, auth, files, operator, public
 from app.schemas import HealthOut
 
 logging.basicConfig(
@@ -51,6 +51,7 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 app.include_router(auth.router)
 app.include_router(admin.router)
 app.include_router(operator.router)
+app.include_router(files.router)
 app.include_router(public.router)
 
 
