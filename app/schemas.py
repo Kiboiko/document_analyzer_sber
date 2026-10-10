@@ -165,6 +165,7 @@ class ApplicationListItem(ORMModel):
     """Строка списка заявок в кабинете."""
 
     id: uuid.UUID
+    full_name: str | None = None
     country: Country
     status: ApplicationStatus
     created_at: datetime

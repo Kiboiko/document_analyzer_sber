@@ -195,9 +195,26 @@ async def list_applications(
         )
         mismatch_ids = set(rows.all())
 
+    names: dict[uuid.UUID, str] = {}
+    if applications:
+        name_rows = await session.execute(
+            select(Document.application_id, Field.value)
+            .join(Field, Field.document_id == Document.id)
+            .where(
+                Document.application_id.in_([a.id for a in applications]),
+                Field.name == "full_name",
+                Field.value.is_not(None),
+                Field.value != "",
+            )
+            .order_by(Field.updated_at.desc())
+        )
+        for app_id, value in name_rows.all():
+            names.setdefault(app_id, value)
+
     items = [
         ApplicationListItem(
             id=app_.id,
+            full_name=names.get(app_.id),
             country=app_.country,
             status=app_.status,
             created_at=app_.created_at,
