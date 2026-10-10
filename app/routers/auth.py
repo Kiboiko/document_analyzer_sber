@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import base64
 import json
-from urllib.parse import urlencode, urljoin
+from urllib.parse import urlencode, urljoin, urlsplit, urlunsplit
 
 from authlib.integrations.starlette_client import OAuth
 from fastapi import APIRouter, Request
@@ -32,6 +32,24 @@ oauth.register(
 _KNOWN_ROLES = {Role.ADMIN.value, Role.OPERATOR.value}
 
 
+def _public_url(url: str) -> str:
+    """Подменить host:port на публичный (OIDC_PUBLIC_ISSUER), если задан.
+
+    OIDC_ISSUER используется для серверных вызовов (discovery, обмен code
+    на токены) внутри docker-сети (`keycloak:8080`) — браузер оператора на
+    хосте это имя не резолвит. Для редиректов (authorize/end_session)
+    подставляем внешний адрес, остальную часть URL не трогаем.
+    """
+    if not settings.oidc_public_issuer:
+        return url
+    internal = urlsplit(settings.oidc_issuer)
+    public = urlsplit(settings.oidc_public_issuer)
+    parts = urlsplit(url)
+    if (parts.scheme, parts.netloc) == (internal.scheme, internal.netloc):
+        parts = parts._replace(scheme=public.scheme, netloc=public.netloc)
+    return urlunsplit(parts)
+
+
 def _jwt_claims(token: str) -> dict:
     """Payload JWT без проверки подписи.
 
@@ -48,7 +66,9 @@ def _jwt_claims(token: str) -> dict:
 async def login(request: Request, next: str = "/operator") -> RedirectResponse:
     """Редирект на Keycloak (authorization endpoint) + state/nonce в сессии."""
     request.session["next"] = next
-    return await oauth.keycloak.authorize_redirect(request, settings.oidc_redirect_url)
+    response = await oauth.keycloak.authorize_redirect(request, settings.oidc_redirect_url)
+    response.headers["location"] = _public_url(response.headers["location"])
+    return response
 
 
 @router.get("/callback")
@@ -94,7 +114,8 @@ async def logout(request: Request) -> RedirectResponse:
     params = {"post_logout_redirect_uri": post_logout_redirect_uri}
     if id_token:
         params["id_token_hint"] = id_token
-    return RedirectResponse(url=f"{end_session_endpoint}?{urlencode(params)}")
+    url = _public_url(f"{end_session_endpoint}?{urlencode(params)}")
+    return RedirectResponse(url=url)
 
 
 def current_user(request: Request) -> CurrentUser | None:
