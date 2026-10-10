@@ -13,7 +13,8 @@
 from __future__ import annotations
 
 import re
-from datetime import date, datetime
+import unicodedata
+from datetime import date
 
 from app.enums import FIELD_TITLES, MIN_FIELDS, DocStatus, DocType
 from app.schemas import FieldValidation, ValidationReport
@@ -48,17 +49,27 @@ _EMPTY_MARKERS = frozenset(
      "отсутствует", "не найдено", "неизвестно", "unknown"}
 )
 
-_DATE_FORMATS = (
-    "%d.%m.%Y",
-    "%d-%m-%Y",
-    "%d/%m/%Y",
-    "%Y-%m-%d",
-    "%Y.%m.%d",
-    "%d.%m.%y",
+# Разделитель частей даты: точка, дефис, косая или пробел.
+_SEP = r"[.\-/\s]+"
+_NUM_DATE_RE = re.compile(rf"^(\d{{1,2}}){_SEP}(\d{{1,2}}){_SEP}(\d{{4}}|\d{{2}})$")
+_ISO_DATE_RE = re.compile(rf"^(\d{{4}}){_SEP}(\d{{1,2}}){_SEP}(\d{{1,2}})$")
+# «01 JAN 1990», «1 января 1990», «01-ЯНВ-90»: месяц словом, любым алфавитом.
+_NAMED_DATE_RE = re.compile(
+    rf"^(\d{{1,2}}){_SEP}?([^\W\d_]{{3,}})\.?{_SEP}?(\d{{4}}|\d{{2}})$"
 )
 
+#: Месяц по первым трём буквам: английские сокращения и русские названия
+#: («янв», «января», «январь» — всё начинается на «янв»).
+_MONTHS = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+    "янв": 1, "фев": 2, "мар": 3, "апр": 4, "мая": 5, "май": 5, "июн": 6,
+    "июл": 7, "авг": 8, "сен": 9, "окт": 10, "ноя": 11, "дек": 12,
+}
+
 _WS_RE = re.compile(r"\s+")
-_LATIN_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z\s'’\-\.]*$")
+#: Знаки, допустимые в имени латиницей рядом с буквами.
+_NAME_PUNCT = frozenset(" '’`-.,/")
 
 #: Бессрочный документ. «Срок не истёк» для него выполняется всегда, а в
 #: минимальный набор ВНЖ срок действия входит — поэтому это не ошибка.
@@ -95,17 +106,36 @@ def parse_date(value: str | None) -> date | None:
 
     # «01.01.1990 г.» и «01.01.1990г» — обычный вид в русских документах.
     text = re.sub(r"\s*г\.?$", "", text, flags=re.IGNORECASE).strip()
-    text = text.replace(" ", "")
 
-    for fmt in _DATE_FORMATS:
-        try:
-            parsed = datetime.strptime(text, fmt).date()
-        except ValueError:
-            continue
-        # %y трактует 00-68 как 2000-е: для даты рождения это обычно неверно,
-        # но угадывать век мы не вправе — отдаём как разобралось.
-        return parsed
-    return None
+    try:
+        if match := _ISO_DATE_RE.match(text):
+            year, month, day = (int(part) for part in match.groups())
+        elif match := _NUM_DATE_RE.match(text):
+            day, month, year = (int(part) for part in match.groups())
+            year = _full_year(year, match.group(3))
+        elif match := _NAMED_DATE_RE.match(text):
+            day = int(match.group(1))
+            month = _MONTHS.get(match.group(2)[:3].lower())
+            if month is None:
+                return None
+            year = _full_year(int(match.group(3)), match.group(3))
+        else:
+            return None
+        return date(year, month, day)
+    except ValueError:
+        # 31.02.1990 и подобное: такой даты не существует.
+        return None
+
+
+def _full_year(year: int, raw: str) -> int:
+    """Двузначный год -> четырёхзначный (00-68 это 2000-е, как у strptime %y).
+
+    Век тут угадывается, и для даты рождения угадать можно неверно; такой
+    документ уйдёт оператору с пометкой, а не будет молча принят.
+    """
+    if len(raw) == 4:
+        return year
+    return 2000 + year if year <= 68 else 1900 + year
 
 
 def normalize_field(doc_type: DocType, name: str, value: object) -> str | None:
@@ -140,9 +170,30 @@ def normalize_fields(
     doc_type: DocType, fields: dict[str, object]
 ) -> dict[str, str | None]:
     """Нормализовать все поля документа."""
-    return {
+    result = {
         name: normalize_field(doc_type, name, value) for name, value in fields.items()
     }
+    if doc_type is DocType.PASSPORT_RF:
+        _split_rf_series_number(result)
+    return result
+
+
+def _split_rf_series_number(fields: dict[str, str | None]) -> None:
+    """Серия и номер паспорта РФ напечатаны слитно: «45 04 123456».
+
+    Модель часто возвращает их одним значением, и тогда по формальным правилам
+    серия не нашлась, а номер получился из 10 цифр, хотя документ прочитан
+    полностью. Разделяем только когда это однозначно: ровно 10 цифр
+    (4 серии + 6 номера); при расхождении с уже найденной серией ничего не
+    трогаем, пусть разбирается проверка.
+    """
+    series = re.sub(r"\D", "", fields.get("series") or "")
+    number = re.sub(r"\D", "", fields.get("number") or "")
+
+    if len(number) == 10 and (not series or number.startswith(series) and len(series) == 4):
+        fields["series"], fields["number"] = number[:4], number[4:]
+    elif len(series) == 10 and not number:
+        fields["series"], fields["number"] = series[:4], series[4:]
 
 
 # --------------------------------------------------------------------------- #
@@ -191,8 +242,26 @@ def _check_not_expired(name: str, value: str, today: date) -> FieldValidation:
     return _ok(name)
 
 
+def _is_latin_name(value: str) -> bool:
+    """Имя целиком латиницей, включая диакритику (JOSÉ, ŁUKASZ, ZOË, ŞAHIN).
+
+    Диапазон A-Z здесь не годится: в удостоверениях ЕС диакритика обычное дело,
+    и каждое такое имя ушло бы в замечание зря. Проверяем, что каждая буква
+    принадлежит латинскому письму, а не кириллице, греческому или арабскому.
+    """
+    letters = 0
+    for char in value:
+        if char.isalpha():
+            if "LATIN" not in unicodedata.name(char, ""):
+                return False
+            letters += 1
+        elif char not in _NAME_PUNCT:
+            return False
+    return letters > 0
+
+
 def _check_latin(name: str, value: str) -> FieldValidation:
-    if not _LATIN_NAME_RE.match(value):
+    if not _is_latin_name(value):
         return _bad(name, f"{_title(name)}: ожидается латиница")
     return _ok(name)
 

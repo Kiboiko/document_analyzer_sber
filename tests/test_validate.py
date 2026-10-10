@@ -128,6 +128,41 @@ for raw, expected in [("01.01.1990", date(1990, 1, 1)), ("1990-01-01", date(1990
     check(f"parse_date({raw!r}) -> {expected}", parse_date(raw) == expected,
           str(parse_date(raw)))
 
+print("\n6. Даты: название месяца, пробелы, разные разделители")
+for raw, expected in [("01 JAN 1990", date(1990, 1, 1)), ("1 Jan 1990", date(1990, 1, 1)),
+                      ("01 ЯНВ 1990", date(1990, 1, 1)), ("1 января 1990 г.", date(1990, 1, 1)),
+                      ("05 03 1988", date(1988, 3, 5)), ("5.3.1988", date(1988, 3, 5)),
+                      ("1990/01/01", date(1990, 1, 1)), ("01-JAN-90", date(1990, 1, 1)),
+                      ("31.02.1990", None), ("1990-13-01", None), ("12 foo 1990", None)]:
+    check(f"parse_date({raw!r}) -> {expected}", parse_date(raw) == expected,
+          str(parse_date(raw)))
+
+run(D.EU_ID, {"number": "X1", "full_name": "JAN KOWALSKI", "birth_date": "01 JAN 1990",
+              "expiry_date": "15 MAR 2030"},
+    "done", {"birth_date": "01.01.1990", "expiry_date": "15.03.2030"},
+    title="дата словом приводится к ДД.ММ.ГГГГ")
+
+print("\n7. Латиница с диакритикой — не замечание")
+for name in ["JOSÉ MÜLLER", "ŁUKASZ ZAŁĘSKI", "ZOË O'BRIEN-SMITH", "NOVÁK, JAN", "ŞAHIN ÇAĞLA"]:
+    run(D.EU_ID, {"number": "X1", "full_name": name, "expiry_date": "01.01.2030"},
+        "done", title=f"ЕС: {name}")
+for name in ["Иванов Иван", "IVANOV ИВАН", "ΓΙΩΡΓΟΣ ΠΑΠΑ", "JAN 2ND"]:
+    run(D.EU_ID, {"number": "X1", "full_name": name, "expiry_date": "01.01.2030"},
+        "flagged", expect_note="латиница", title=f"ЕС: не латиница «{name}»")
+
+print("\n8. Серия и номер паспорта РФ слитно")
+base = {"full_name": "Иванов Иван", "birth_date": "01.01.1990"}
+for title, raw, series, number, status in [
+    ("всё в номере", {"series": None, "number": "4504 123456"}, "4504", "123456", "done"),
+    ("серия повторена в номере", {"series": "4504", "number": "4504123456"}, "4504", "123456", "done"),
+    ("всё в серии", {"series": "45 04 123456", "number": None}, "4504", "123456", "done"),
+    ("раздельно, как надо", {"series": "4504", "number": "123456"}, "4504", "123456", "done"),
+    # Серия не совпадает с началом номера: неоднозначно, ничего не режем.
+    ("серия противоречит номеру", {"series": "4599", "number": "4504123456"}, "4599", "4504123456", "flagged"),
+    ("короткая серия", {"series": "45", "number": "4504123456"}, "45", "4504123456", "flagged"),
+]:
+    run(D.PASSPORT_RF, {**base, **raw}, status, {"series": series, "number": number}, title=title)
+
 print(f"\n==== успешно: {len(OK)}, провалов: {len(FAIL)}")
 if FAIL:
     print("ПРОВАЛЫ:", FAIL)
