@@ -87,16 +87,30 @@
             </form>
           </header>
 
-          {% if document.files %}
-            <ul class="document-files" aria-label="Загруженные файлы">
-              {% for file in document.files %}
-                <li>
-                  <span>{{ file.orig_name }}</span>
-                  <span class="file-meta">{{ file.mime }} · {{ (file.size / 1024)|round|int }} КБ</span>
-                </li>
-              {% endfor %}
-            </ul>
-          {% endif %}
+          <div class="document-body">
+            {% if document.files %}
+              <div class="document-originals" aria-label="Оригиналы файлов">
+                {% for file in document.files %}
+                  <figure class="original-file">
+                    {% set file_url = "/api/operator/documents/" ~ document.id ~ "/files/" ~ file.id %}
+                    {% if file.mime.startswith("image/") %}
+                      <a href="{{ file_url }}" target="_blank" rel="noopener">
+                        <img src="{{ file_url }}" alt="{{ file.orig_name }}" loading="lazy">
+                      </a>
+                    {% else %}
+                      <a class="original-file-link" href="{{ file_url }}" target="_blank" rel="noopener">
+                        Открыть файл
+                      </a>
+                    {% endif %}
+                    <figcaption class="file-meta">
+                      {{ file.orig_name }} · {{ file.mime }} · {{ (file.size / 1024)|round|int }} КБ
+                    </figcaption>
+                  </figure>
+                {% endfor %}
+              </div>
+            {% else %}
+              <p class="empty-state">Файлы не загружены.</p>
+            {% endif %}
 
           {% if document.fields %}
             <div class="field-list">
@@ -134,6 +148,7 @@
           {% else %}
             <p class="empty-state">Поля пока не распознаны.</p>
           {% endif %}
+          </div>
         </article>
       {% else %}
         <p class="empty-state">В заявке пока нет документов.</p>
