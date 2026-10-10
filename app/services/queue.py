@@ -25,8 +25,21 @@ def _utcnow() -> datetime:
 async def enqueue(session: AsyncSession, document_id: uuid.UUID) -> Job:
     """Поставить задачу разбора документа в очередь (status=pending).
 
-    Коммит — на вызывающей стороне (часть общей транзакции приёма/reparse).
+    Идемпотентно: если по документу уже висит невзятая задача, возвращаем её.
+    Иначе дозагрузка трёх файлов в один документ дала бы три разбора одного
+    и того же, а olmOCR у нас один на команду.
+
+    Коммит — за вызывающим: задача должна попасть в БД той же транзакцией,
+    что и принятые файлы (приём) или сбросом статуса документа (reparse).
     """
+    existing = await session.scalar(
+        select(Job)
+        .where(Job.document_id == document_id, Job.status == JobStatus.PENDING)
+        .limit(1)
+    )
+    if existing is not None:
+        return existing
+
     job = Job(document_id=document_id, status=JobStatus.PENDING)
     session.add(job)
     await session.flush()

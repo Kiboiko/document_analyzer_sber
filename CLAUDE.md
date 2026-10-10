@@ -122,3 +122,7 @@ MAX_FILES_PER_REQUEST=30
   Dockerfile, .env.example, мелкие правки, тесты-болванки.
 - `/clear` между несвязанными задачами. Точечные промты с путём к файлу,
   не «осмотри проект». Правки через Edit, не переписывание файла целиком.
+
+
+## Git
+Commit messages: English, Conventional Commits (feat/fix/docs/chore), imperative.

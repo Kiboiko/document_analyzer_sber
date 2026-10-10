@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     llm_base_url: str = "https://llm.ilons.ru"
     ilons_api_key: str = ""
     llm_model: str = "Qwen/Qwen3.8-27B"
+    #: Qwen у ilons — reasoning-модель: часть бюджета уходит на рассуждения,
+    #: и на тесном лимите `content` приходит пустым. Меньше 1500 не ставить.
+    llm_max_tokens: int = 2000
 
     # LLM/VLM local: Ollama
     ollama_host: str = "http://ollama:11434"

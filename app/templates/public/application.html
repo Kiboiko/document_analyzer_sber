@@ -1,3 +1,41 @@
 {% extends "base.html" %}
-{# TODO(Степан): набор документов по стране, загрузка файлов, блок статусов. #}
-{% block content %}{% endblock %}
+{% block title %}Моя заявка{% endblock %}
+
+{% block content %}
+<h1>Моя заявка</h1>
+<p class="lead">
+  Страна: <strong>{{ country_title }}</strong>.
+  Сохраните ссылку на эту страницу — по ней вы вернётесь к заявке и увидите
+  результат проверки.
+</p>
+
+{% if error %}
+  <p class="alert error">{{ error }}</p>
+{% endif %}
+
+<h2>Нужные документы</h2>
+<p class="hint">
+  Фотографируйте документ целиком, при хорошем свете, без блика.
+  До {{ max_files }} файлов за раз, каждый не больше {{ max_mb }} МБ.
+  Форматы: JPEG, PNG, WEBP, TIFF, PDF.
+</p>
+
+{% for doc_type in status.required_documents %}
+  <form class="card upload" method="post"
+        action="/a/{{ token }}/upload" enctype="multipart/form-data">
+    <input type="hidden" name="doc_type" value="{{ doc_type.value }}">
+    <label class="doc-title" for="file-{{ doc_type.value }}">
+      {{ doc_titles[doc_type.value] }}
+    </label>
+    <input id="file-{{ doc_type.value }}" type="file" name="files"
+           accept="image/*,application/pdf" multiple required>
+    <button type="submit">Загрузить</button>
+  </form>
+{% endfor %}
+
+<h2>Что уже загружено</h2>
+{# Фрагмент сам себя подменяет поллингом: следить за разбором вручную не нужно.
+   Правила обновления живут внутри _status.html, чтобы после подмены они
+   не терялись. #}
+{% include "public/_status.html" %}
+{% endblock %}

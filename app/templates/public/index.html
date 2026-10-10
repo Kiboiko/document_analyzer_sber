@@ -1,3 +1,30 @@
 {% extends "base.html" %}
-{# TODO(Степан): выбор страны -> создание заявки (TZ 1, 2). #}
-{% block content %}{% endblock %}
+{% block title %}Загрузка документов{% endblock %}
+
+{% block content %}
+<h1>Документы для трудоустройства</h1>
+<p class="lead">
+  Выберите страну — покажем, какие документы нужны, и примем их фотографии.
+  Регистрация не нужна: вы получите личную ссылку на свою заявку.
+</p>
+
+<form method="post" action="/start" class="card">
+  <fieldset>
+    <legend>Страна</legend>
+    {% for value, title in countries %}
+      <label class="choice">
+        <input type="radio" name="country" value="{{ value.value }}"
+               {% if loop.first %}checked{% endif %}>
+        <span>{{ title }}</span>
+        <small>
+          {% for _, doc_title in required[value.value] %}
+            {{ doc_title }}{% if not loop.last %} · {% endif %}
+          {% endfor %}
+        </small>
+      </label>
+    {% endfor %}
+  </fieldset>
+
+  <button type="submit" class="primary">Продолжить</button>
+</form>
+{% endblock %}

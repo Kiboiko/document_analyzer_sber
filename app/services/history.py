@@ -1,7 +1,10 @@
 """Журнал событий заявки: запись и чтение таймлайна (TZ 9).
 
 Общий сервис: пишут обе ветки, поэтому меняем аккуратно.
-Каркас: только сигнатуры, тел нет.
+
+Транзакции: `record` только добавляет событие в сессию и делает flush.
+Коммит — за вызывающим, чтобы событие и изменение состояния попадали в БД
+одной транзакцией. Иначе в истории появились бы записи о том, чего не было.
 """
 
 from __future__ import annotations
@@ -15,6 +18,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.enums import EventType
 from app.models import Event
 from app.schemas import EventOut
+
+#: Значения `Event.actor` для неперсональных источников.
+ACTOR_APPLICANT = "applicant"
+ACTOR_WORKER = "worker"
+ACTOR_SYSTEM = "system"
 
 
 async def record(
@@ -47,7 +55,7 @@ async def timeline(
     stmt = (
         select(Event)
         .where(Event.application_id == application_id)
-        .order_by(Event.created_at)
+        .order_by(Event.created_at.asc(), Event.id.asc())
         .limit(limit)
     )
     rows = (await session.scalars(stmt)).all()
