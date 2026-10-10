@@ -61,7 +61,12 @@ async def claim_next(session: AsyncSession, worker_id: str) -> Job | None:
 
 async def mark_done(session: AsyncSession, job_id: uuid.UUID) -> None:
     """Задача выполнена: status=done, finished_at."""
-    raise NotImplementedError  # TODO(Кирилл)
+    job = await session.get(Job, job_id)
+    if job is None:
+        return
+    job.status = JobStatus.DONE
+    job.finished_at = _utcnow()
+    await session.commit()
 
 
 async def mark_failed(
@@ -71,7 +76,19 @@ async def mark_failed(
     retry: bool = True,
 ) -> None:
     """Ошибка провайдера/разбора: attempts++, retry до JOB_MAX_ATTEMPTS, иначе failed."""
-    raise NotImplementedError  # TODO(Кирилл)
+    job = await session.get(Job, job_id)
+    if job is None:
+        return
+    job.attempts += 1
+    job.last_error = error[:2000]
+    if retry and job.attempts < settings.job_max_attempts:
+        job.status = JobStatus.PENDING
+        job.locked_at = None
+        job.worker_id = None
+    else:
+        job.status = JobStatus.FAILED
+        job.finished_at = _utcnow()
+    await session.commit()
 
 
 async def reap_stale(session: AsyncSession) -> int:
@@ -80,9 +97,62 @@ async def reap_stale(session: AsyncSession) -> int:
     Запускается на старте воркера и периодически — так работа не теряется
     при рестарте.
     """
-    raise NotImplementedError  # TODO(Кирилл): JOB_LOCK_TIMEOUT_S
+    threshold = _utcnow() - timedelta(seconds=settings.job_lock_timeout_s)
+    stmt = (
+        select(Job)
+        .where(Job.status == JobStatus.PROCESSING, Job.locked_at < threshold)
+        .with_for_update(skip_locked=True)
+    )
+    jobs = list((await session.scalars(stmt)).all())
+    for job in jobs:
+        job.status = JobStatus.PENDING
+        job.attempts += 1
+        job.locked_at = None
+        job.worker_id = None
+    await session.commit()
+    return len(jobs)
 
 
 async def stats(session: AsyncSession) -> QueueStats:
     """Счётчики для раздела «в работе» и GET /api/operator/queue."""
-    raise NotImplementedError  # TODO(Кирилл)
+    now = _utcnow()
+    hour_ago = now - timedelta(hours=1)
+
+    async def count(*where) -> int:
+        result = await session.scalar(
+            select(func.count()).select_from(Job).where(*where)
+        )
+        return result or 0
+
+    pending = await count(Job.status == JobStatus.PENDING)
+    processing = await count(Job.status == JobStatus.PROCESSING)
+    failed = await count(Job.status == JobStatus.FAILED)
+    done_last_hour = await count(
+        Job.status == JobStatus.DONE, Job.finished_at >= hour_ago
+    )
+
+    avg_duration = await session.scalar(
+        select(func.avg(func.extract("epoch", Job.finished_at - Job.started_at)))
+        .select_from(Job)
+        .where(Job.status == JobStatus.DONE, Job.finished_at >= hour_ago)
+    )
+
+    oldest_pending_created = await session.scalar(
+        select(func.min(Job.created_at)).select_from(Job).where(
+            Job.status == JobStatus.PENDING
+        )
+    )
+    oldest_pending_age_s = (
+        (now - oldest_pending_created).total_seconds()
+        if oldest_pending_created is not None
+        else None
+    )
+
+    return QueueStats(
+        pending=pending,
+        processing=processing,
+        failed=failed,
+        done_last_hour=done_last_hour,
+        avg_duration_s=float(avg_duration) if avg_duration is not None else None,
+        oldest_pending_age_s=oldest_pending_age_s,
+    )
