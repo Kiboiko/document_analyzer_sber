@@ -9,6 +9,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.enums import EventType
@@ -25,7 +26,16 @@ async def record(
     payload: dict[str, Any] | None = None,
 ) -> Event:
     """Записать событие. Каждое значимое действие обязано пройти здесь."""
-    raise NotImplementedError  # TODO
+    event = Event(
+        application_id=application_id,
+        document_id=document_id,
+        type=type,
+        actor=actor,
+        payload=payload or {},
+    )
+    session.add(event)
+    await session.flush()
+    return event
 
 
 async def timeline(
@@ -34,4 +44,11 @@ async def timeline(
     limit: int = 200,
 ) -> list[EventOut]:
     """События заявки по возрастанию времени — для карточки оператора."""
-    raise NotImplementedError  # TODO
+    stmt = (
+        select(Event)
+        .where(Event.application_id == application_id)
+        .order_by(Event.created_at)
+        .limit(limit)
+    )
+    rows = (await session.scalars(stmt)).all()
+    return [EventOut.model_validate(row) for row in rows]
