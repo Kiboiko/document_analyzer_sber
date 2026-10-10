@@ -168,6 +168,7 @@
             <time datetime="{{ event.created_at.isoformat() }}">{{ event.created_at.strftime('%d.%m %H:%M:%S') }}</time>
             <span><strong>{{ event_titles.get(event.type, event.type.value) }}</strong> · {{ event.actor }}</span>
             {% if event.payload.error %}<p>Причина: {{ event.payload.error }}</p>
+              {% if event.payload.detail %}<p class="muted">Техническая причина: {{ event.payload.detail }}</p>{% endif %}
             {% elif event.payload.reason %}<p>Причина: {{ event.payload.reason }}</p>
             {% elif event.payload.notes %}<p>Замечания: {{ event.payload.notes|join('; ') }}</p>
             {% elif event.payload.field %}<p>Поле: {{ event.payload.field }}</p>

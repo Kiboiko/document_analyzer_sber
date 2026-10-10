@@ -22,7 +22,7 @@ from sqlalchemy.orm import selectinload
 from app.config import settings
 from app.db import dispose_engine, session_factory
 from app.enums import EXTRACTED_FIELDS, DocStatus, EventType, FieldSource
-from app.model import recognize
+from app.model import ProviderError, recognize
 from app.model.validate import validate_document
 from app.models import Application, Document, Field, Job
 from app.schemas import ExtractResult, ValidationReport
@@ -56,23 +56,55 @@ def _apply_fields(document: Document, result: ExtractResult, report: ValidationR
         field.validation_msg = verdict.message if verdict else None
 
 
+_RETRY_LATER = "Распознавание временно не удалось. Мы повторим попытку автоматически."
+_GIVE_UP = (
+    "Не удалось распознать документ. Загрузите фото ещё раз "
+    "или дождитесь, пока сотрудник запустит повторную проверку."
+)
+_BAD_FILE = "Не удалось распознать документ. Загрузите более чёткое фото или скан."
+
+
 async def _fail_document(
-    session, job_id: uuid.UUID, document: Document, reason: str
+    session,
+    job: Job,
+    document: Document,
+    *,
+    user_message: str | None,
+    detail: str,
+    retryable: bool,
 ) -> None:
-    """Документ не разобран: error_reason, Event(parse_failed), Job в retry/failed."""
-    log.warning("job %s: документ %s не разобран: %s", job_id, document.id, reason)
-    document.status = DocStatus.ERROR
-    document.error_reason = reason
+    """Документ не разобран: Event(parse_failed), Job в retry/failed.
+
+    `error_reason` видит соискатель, поэтому туда идёт только `user_message`;
+    технический `detail` — в журнал событий, лог и Job.last_error.
+    Пока будет повтор, документ остаётся в очереди, а не «не распознан».
+    """
+    will_retry = retryable and job.attempts + 1 < settings.job_max_attempts
+    log.warning(
+        "job %s: документ %s не разобран (повтор=%s): %s",
+        job.id, document.id, will_retry, detail,
+    )
+    if will_retry:
+        document.status = DocStatus.ACCEPTED
+        document.error_reason = user_message or _RETRY_LATER
+    else:
+        document.status = DocStatus.ERROR
+        document.error_reason = (
+            _GIVE_UP if retryable else (user_message or _BAD_FILE)
+        )
     await history.record(
         session,
         document.application_id,
         EventType.PARSE_FAILED,
         "worker",
         document_id=document.id,
-        payload={"error": reason},
+        payload={"error": document.error_reason, "detail": detail, "retry": will_retry},
     )
+    application = await session.get(Application, document.application_id)
+    if application is not None:
+        await refresh_application_status(session, application)
     await session.commit()
-    await queue.mark_failed(session, job_id, reason)
+    await queue.mark_failed(session, job.id, detail, retry=will_retry)
 
 
 async def process_job(job: Job) -> None:
@@ -102,25 +134,42 @@ async def process_job(job: Job) -> None:
         )
         await session.commit()
 
+        reupload = "Файл документа не найден. Загрузите фото ещё раз."
         if not document.files:
-            await _fail_document(session, job_id, document, "нет загруженных файлов")
+            await _fail_document(
+                session, job, document,
+                user_message=reupload, detail="нет загруженных файлов", retryable=False,
+            )
             return
 
         file_path = settings.storage_dir / document.files[-1].stored_path
         try:
             image_bytes = file_path.read_bytes()
         except OSError as exc:
-            await _fail_document(session, job_id, document, f"файл недоступен: {exc}")
+            await _fail_document(
+                session, job, document,
+                user_message=reupload, detail=f"файл недоступен: {exc}", retryable=False,
+            )
             return
 
         try:
             result = await recognize(document.doc_type, image_bytes)
-        except Exception as exc:  # провайдер/сеть — не валим воркер (TZ 6)
-            # У части исключений (например NotImplementedError) текст пустой —
-            # оператор в карточке должен видеть причину, а не "ошибка модели: ".
-            detail = str(exc) or type(exc).__name__
-            log.warning("recognize failed for document %s: %s", document_id, detail)
-            await _fail_document(session, job_id, document, f"ошибка модели: {detail}")
+        except ProviderError as exc:
+            await _fail_document(
+                session, job, document,
+                user_message=exc.user_message,
+                detail=str(exc) or type(exc).__name__,
+                retryable=exc.retryable,
+            )
+            return
+        except Exception as exc:  # непредвиденное — не валим воркер (TZ 6)
+            # У части исключений (например NotImplementedError) текст пустой.
+            await _fail_document(
+                session, job, document,
+                user_message=None,
+                detail=f"{type(exc).__name__}: {exc}",
+                retryable=True,
+            )
             return
 
         report = validate_document(document.doc_type, result.fields)
