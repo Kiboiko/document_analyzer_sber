@@ -33,6 +33,12 @@ services:
   app:
     build: .
     env_file: .env
+    # Внутри docker-сети адреса другие, чем у запуска с хоста (.env с localhost).
+    environment: &docker-net
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@postgres:5432/${POSTGRES_DB:-app}
+      OIDC_ISSUER: http://keycloak:8080/realms/docs
+      OIDC_PUBLIC_ISSUER: http://localhost:8080
+      KEYCLOAK_ADMIN_URL: http://keycloak:8080
     depends_on:
       postgres:
         condition: service_healthy
@@ -47,6 +53,7 @@ services:
     build: .
     command: ["python", "-m", "app.worker"]
     env_file: .env
+    environment: *docker-net
     depends_on:
       postgres:
         condition: service_healthy
