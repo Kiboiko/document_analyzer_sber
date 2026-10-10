@@ -179,4 +179,8 @@ async def ocr_text(image_bytes: bytes) -> str:
     except (KeyError, IndexError, TypeError) as exc:
         raise OcrError(f"неожиданная форма ответа olmOCR: {data}") from exc
 
+    # Сырой ответ нужен, чтобы сверить разбор с тем, что реально отдаёт сервер.
+    # В нём персональные данные, поэтому только DEBUG (settings.debug).
+    log.debug("olmOCR raw response: %r", content)
+
     return _strip_front_matter(content or "")
