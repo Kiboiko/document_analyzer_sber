@@ -147,8 +147,17 @@
           {% for event in card.events|sort(attribute='created_at') %}
             <li class="timeline-item">
               <time datetime="{{ event.created_at.isoformat() }}">{{ event.created_at.strftime('%d.%m.%Y %H:%M:%S') }}</time>
-              <strong>{{ event.type.value }}</strong>
+              <strong>{{ event_titles.get(event.type, event.type.value) }}</strong>
               <span>— {{ event.actor }}</span>
+              {% if event.payload.error %}
+                <p class="timeline-reason">Причина: {{ event.payload.error }}</p>
+              {% elif event.payload.reason %}
+                <p class="timeline-reason">Причина: {{ event.payload.reason }}</p>
+              {% elif event.payload.notes %}
+                <p class="timeline-reason">Замечания: {{ event.payload.notes|join('; ') }}</p>
+              {% elif event.payload.field %}
+                <p class="timeline-reason">Поле: {{ event.payload.field }}</p>
+              {% endif %}
             </li>
           {% endfor %}
         </ol>

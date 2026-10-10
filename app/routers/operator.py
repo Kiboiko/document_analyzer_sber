@@ -17,6 +17,7 @@ from sqlalchemy.orm import selectinload
 from app.db import get_session
 from app.enums import (
     DOC_TYPE_TITLES,
+    EVENT_TYPE_TITLES,
     FIELD_TITLES,
     REQUIRED_DOCUMENTS,
     Country,
@@ -112,7 +113,9 @@ async def page_application_card(
         application_id=application_id, user=user, session=session
     )
     return request.app.state.templates.TemplateResponse(
-        request, "operator/card.html", {"user": user, "card": card}
+        request,
+        "operator/card.html",
+        {"user": user, "card": card, "event_titles": EVENT_TYPE_TITLES},
     )
 
 
