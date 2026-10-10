@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import base64
 import io
 import logging
 
@@ -23,18 +22,6 @@ __all__ = ["to_png_pages", "ocr_text", "sniff_mime", "OcrError"]
 class OcrError(ProviderError):
     """OCR недоступен или не смог обработать страницу."""
 
-
-#: Промпт, на котором обучался olmOCR-2: просим «прочитать страницу как есть».
-#: Модель отвечает YAML-front-matter + текст, front matter мы отрезаем.
-_OLMOCR_PROMPT = (
-    "Attached is one page of a document that you must process. "
-    "Just return the plain text representation of this document as if you "
-    "were reading it naturally. Convert equations to LateX and tables to "
-    "markdown.\n"
-    "Return your output as markdown, with a front matter section on top "
-    "specifying values for the primary_language, is_rotation_valid, "
-    "rotation_correction, is_table, and is_diagram parameters."
-)
 
 #: Больше 2000 px по длинной стороне модели не нужно, а трафик и время растут.
 _MAX_SIDE = 2000
@@ -139,44 +126,24 @@ def _strip_front_matter(text: str) -> str:
 
 
 async def ocr_text(image_bytes: bytes) -> str:
-    """Текст страницы от olmOCR. Адрес и модель — из env."""
+    """Текст страницы от olmOCR. Адрес — из env (OLMOCR_SERVER).
+
+    Выданный сервер — не "голый" vLLM с OpenAI-совместимым API, а обёртка
+    (`olmOCR service`, см. `{OLMOCR_SERVER}/docs`): `POST /ocr`, тело —
+    multipart с полем `file`, ответ — text/plain, без YAML front-matter.
+    Модель/промпт сервер выбирает сам — `OLMOCR_MODEL` здесь не участвует.
+    """
     if not settings.olmocr_server:
         raise OcrError("OLMOCR_SERVER не задан: OCR недоступен")
 
-    base = settings.olmocr_server.rstrip("/")
-    # В env адрес уже с /v1 — не дублируем суффикс, если его забыли.
-    url = f"{base}/chat/completions" if base.endswith("/v1") else f"{base}/v1/chat/completions"
-
-    b64 = base64.b64encode(image_bytes).decode("ascii")
-    payload = {
-        "model": settings.olmocr_model,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": _OLMOCR_PROMPT},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{b64}"},
-                    },
-                ],
-            }
-        ],
-        "temperature": 0.0,
-        "max_tokens": 3000,
-    }
+    url = f"{settings.olmocr_server.rstrip('/')}/ocr"
+    files = {"file": ("page.png", image_bytes, "image/png")}
 
     try:
         async with httpx.AsyncClient(timeout=settings.model_timeout_s) as client:
-            resp = await client.post(url, json=payload)
+            resp = await client.post(url, files=files)
             resp.raise_for_status()
-            data = resp.json()
     except httpx.HTTPError as exc:
         raise OcrError(f"olmOCR недоступен: {exc}") from exc
 
-    try:
-        content = data["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as exc:
-        raise OcrError(f"неожиданная форма ответа olmOCR: {data}") from exc
-
-    return _strip_front_matter(content or "")
+    return _strip_front_matter(resp.text or "")
