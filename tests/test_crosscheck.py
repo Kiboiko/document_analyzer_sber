@@ -5,6 +5,10 @@ import sys
 
 from sqlalchemy import select, text
 
+from _safety import require_throwaway_db
+
+require_throwaway_db()
+
 from app.db import create_all, engine, session_factory
 from app.enums import (
     ApplicationStatus,
