@@ -112,4 +112,33 @@ async def create_operator(username: str, email: str) -> OperatorCreated:
 
 async def list_operators() -> list[OperatorOut]:
     """Пользователи realm с ролью operator."""
-    raise NotImplementedError  # TODO
+    token = await admin_token()
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(
+            f"{_realm_base()}/roles/{Role.OPERATOR.value}/users",
+            headers=headers,
+            params={"max": 500},
+        )
+    if resp.status_code != 200:
+        raise KeycloakAdminError(f"list operators: {resp.status_code} {resp.text}")
+
+    out: list[OperatorOut] = []
+    for user in resp.json():
+        created_ms = user.get("createdTimestamp")
+        created_at = (
+            datetime.fromtimestamp(created_ms / 1000, tz=timezone.utc)
+            if created_ms
+            else None
+        )
+        out.append(
+            OperatorOut(
+                id=user["id"],
+                username=user["username"],
+                email=user.get("email"),
+                enabled=user.get("enabled", True),
+                created_at=created_at,
+            )
+        )
+    return out
