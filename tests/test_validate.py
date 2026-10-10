@@ -121,6 +121,15 @@ run(D.RESIDENCE_PERMIT, {"number": "82 1234567", "issue_date": "10.10.2015",
                          "expiry_date": "10.10.2020", "permit_type": "временное"},
     "flagged", expect_note="срок действия истёк", title="просроченный ВНЖ")
 
+print("\n4а. Гражданство в удостоверении ЕС")
+eu_base = {"number": "X1", "full_name": "JAN KOWALSKI", "expiry_date": "01.01.2030"}
+for value in ["POL", "DEU", "FRANÇAISE", "BUNDESREPUBLIK DEUTSCHLAND", "ITALIANA",
+              "Republic of Poland", "Гражданин Франции", "ROMÂNIA"]:
+    run(D.EU_ID, {**eu_base, "citizenship": value}, "done", title=f"ЕС: гражданство «{value}»")
+for value in ["REPUBLIC OF BELARUS", "BLR", "INDIA", "Иордания", "UKRAINE"]:
+    run(D.EU_ID, {**eu_base, "citizenship": value}, "flagged",
+        expect_note="не страна ЕС", title=f"не ЕС: «{value}»")
+
 print("\n5. Разбор даты")
 for raw, expected in [("01.01.1990", date(1990, 1, 1)), ("1990-01-01", date(1990, 1, 1)),
                       ("31/12/2025", date(2025, 12, 31)), ("01-01-1990", date(1990, 1, 1)),

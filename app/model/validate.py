@@ -266,6 +266,42 @@ def _check_latin(name: str, value: str) -> FieldValidation:
     return _ok(name)
 
 
+#: Коды ISO 3166 alpha-3 стран ЕС — сверяем как отдельное слово.
+_EU_CODES = frozenset(
+    "AUT BEL BGR HRV CYP CZE DNK EST FIN FRA DEU GRC HUN IRL ITA LVA LTU LUX "
+    "MLT NLD POL PRT ROU SVK SVN ESP SWE".split()
+)
+#: Основы названий стран и гражданства (англ., местные, рус.) — сверяем с
+#: началом слова: «GERMAN», «DEUTSCH», «ФРАНЦ» покрывают и страну, и
+#: прилагательное, а «ДАНИ» не цепляет «ИОРДАНИЯ».
+_EU_STEMS = (
+    "AUSTRI", "ÖSTERREICH", "BELGI", "BULGAR", "CROATIA", "HRVATSK", "CYPR",
+    "CZECH", "ČESK", "DENMARK", "DANISH", "DANMARK", "ESTONIA", "EESTI",
+    "FINLAND", "FINNISH", "SUOM", "FRANCE", "FRENCH", "FRANÇAIS", "FRANCAIS",
+    "GERMAN", "DEUTSCH", "GREECE", "GREEK", "HELLENIC", "HUNGAR", "MAGYAR",
+    "IRELAND", "IRISH", "ITALY", "ITALIAN", "LATVIA", "LATVIJ", "LITHUANIA",
+    "LIETUV", "LUXEMBOURG", "MALTA", "MALTESE", "NETHERLANDS", "DUTCH",
+    "NEDERLAND", "NIEDERLAND", "ÉIRE", "EIRE", "POLAND", "POLISH", "POLSK", "PORTUGAL", "PORTUGUES",
+    "ROMANIA", "ROMÂN", "SLOVAK", "SLOVEN", "SPAIN", "SPANISH", "ESPAÑ",
+    "ESPAN", "SWEDEN", "SWEDISH", "SVERIGE", "SVENSK",
+    "АВСТРИ", "БЕЛЬГИ", "БОЛГАР", "ХОРВАТ", "КИПР", "ЧЕХ", "ДАНИ", "ДАТСК",
+    "ЭСТОН", "ФИНЛЯНД", "ФИНСК", "ФРАНЦ", "ГЕРМАН", "НЕМЕЦ", "ГРЕЦ", "ГРЕЧ",
+    "ВЕНГ", "ИРЛАНД", "ИТАЛ", "ЛАТВ", "ЛАТЫШ", "ЛИТВ", "ЛИТОВ", "ЛЮКСЕМБУРГ",
+    "МАЛЬТ", "НИДЕРЛАНД", "ГОЛЛАНД", "ПОЛЬ", "ПОРТУГАЛ", "РУМЫН", "СЛОВАК",
+    "СЛОВЕН", "ИСПАН", "ШВЕЦ", "ШВЕД",
+)
+
+
+def _check_eu_citizenship(name: str, value: str) -> FieldValidation:
+    words = re.findall(r"[^\W\d_]+", value.upper())
+    if any(w in _EU_CODES or w.startswith(_EU_STEMS) for w in words):
+        return _ok(name)
+    return _bad(
+        name,
+        f"{_title(name)}: «{value}» — не страна ЕС, проверьте, тот ли это документ",
+    )
+
+
 def validate_field(
     doc_type: DocType,
     name: str,
@@ -313,6 +349,8 @@ def validate_field(
             return _check_not_expired(name, text, today)
         case (DocType.EU_ID, "birth_date"):
             return _check_not_future(name, text, today)
+        case (DocType.EU_ID, "citizenship"):
+            return _check_eu_citizenship(name, text)
 
         case (DocType.RESIDENCE_PERMIT, "expiry_date"):
             return _check_not_expired(name, text, today)
