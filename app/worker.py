@@ -23,7 +23,7 @@ from app.config import settings
 from app.db import dispose_engine, session_factory
 from app.enums import EXTRACTED_FIELDS, DocStatus, EventType, FieldSource
 from app.model import ProviderError, recognize
-from app.model.validate import validate_document
+from app.model.validate import missing_reason, validate_document
 from app.models import Application, Document, Field, Job
 from app.schemas import ExtractResult, ValidationReport
 from app.services import crosscheck, history, queue
@@ -107,6 +107,51 @@ async def _fail_document(
     await queue.mark_failed(session, job.id, detail, retry=will_retry)
 
 
+#: Сколько последних файлов документа распознаём: каждый — отдельный вызов
+#: OCR+LLM (~20 с), и разбор должен уложиться в JOB_LOCK_TIMEOUT_S.
+_MAX_FILES_PER_DOCUMENT = 5
+
+
+async def _recognize_files(document: Document) -> ExtractResult:
+    """Распознать все файлы документа (лицо, оборот, повторное фото) и свести поля.
+
+    Файлы одной загрузки имеют одинаковый created_at, так что «последний файл»
+    случаен — распознаём каждый. Идём от новых к старым: значение из более
+    свежего файла приоритетнее, пустые поля добираем из остальных.
+    """
+    files = list(reversed(document.files))[:_MAX_FILES_PER_DOCUMENT]
+    results: list[ExtractResult] = []
+    last_error: Exception | None = None
+    for file in files:
+        try:
+            data = (settings.storage_dir / file.stored_path).read_bytes()
+            results.append(await recognize(document.doc_type, data))
+        except (OSError, ProviderError) as exc:
+            log.warning("документ %s, файл %s: %s", document.id, file.id, exc)
+            last_error = exc
+    if not results:
+        assert last_error is not None
+        raise last_error
+
+    fields: dict[str, str | None] = {}
+    confidence: dict[str, float] = {}
+    for res in results:
+        for name, value in res.fields.items():
+            if fields.get(name) in (None, "") and value not in (None, ""):
+                fields[name] = value
+                if name in res.confidence:
+                    confidence[name] = res.confidence[name]
+            fields.setdefault(name, value)
+
+    return ExtractResult(
+        fields=fields,
+        raw_text="\n\n---\n\n".join(r.raw_text for r in results),
+        provider=results[0].provider,
+        usage={**results[0].usage, "files_recognized": len(results)},
+        confidence=confidence,
+    )
+
+
 async def process_job(job: Job) -> None:
     """Разобрать один документ в своей сессии БД.
 
@@ -142,18 +187,14 @@ async def process_job(job: Job) -> None:
             )
             return
 
-        file_path = settings.storage_dir / document.files[-1].stored_path
         try:
-            image_bytes = file_path.read_bytes()
+            result = await _recognize_files(document)
         except OSError as exc:
             await _fail_document(
                 session, job, document,
                 user_message=reupload, detail=f"файл недоступен: {exc}", retryable=False,
             )
             return
-
-        try:
-            result = await recognize(document.doc_type, image_bytes)
         except ProviderError as exc:
             await _fail_document(
                 session, job, document,
@@ -175,7 +216,12 @@ async def process_job(job: Job) -> None:
         report = validate_document(document.doc_type, result.fields)
         _apply_fields(document, result, report)
         document.status = report.status
-        document.error_reason = "; ".join(report.notes) if report.notes else None
+        if report.status == DocStatus.ERROR:
+            document.error_reason = missing_reason(
+                document.doc_type, report.missing_required
+            )
+        else:
+            document.error_reason = "; ".join(report.notes) if report.notes else None
 
         application = await session.get(Application, document.application_id)
         if application is not None:
