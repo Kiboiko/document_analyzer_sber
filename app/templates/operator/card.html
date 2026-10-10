@@ -81,6 +81,7 @@
               class="reparse-form"
               hx-post="/api/operator/documents/{{ document.id }}/reparse"
               hx-swap="none"
+              hx-on::after-request="if (event.detail.successful) location.reload()"
             >
               <button class="button" type="submit">Повторный разбор</button>
             </form>
@@ -105,6 +106,7 @@
                   hx-patch="/api/operator/documents/{{ document.id }}/fields/{{ field.id }}"
                   hx-ext="json-enc"
                   hx-swap="none"
+                  hx-on::after-request="if (event.detail.successful) location.reload()"
                 >
                   <label for="field-{{ field.id }}">{{ field.title or field.name }}</label>
                   <div class="field-input-row">
