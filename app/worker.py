@@ -24,9 +24,10 @@ from app.db import dispose_engine, session_factory
 from app.enums import EXTRACTED_FIELDS, DocStatus, EventType, FieldSource
 from app.model import recognize
 from app.model.validate import validate_document
-from app.models import Document, Field, Job
+from app.models import Application, Document, Field, Job
 from app.schemas import ExtractResult, ValidationReport
 from app.services import crosscheck, history, queue
+from app.services.intake import refresh_application_status
 
 log = logging.getLogger(__name__)
 
@@ -127,9 +128,14 @@ async def process_job(job: Job) -> None:
         document.status = report.status
         document.error_reason = "; ".join(report.notes) if report.notes else None
 
+        application = await session.get(Application, document.application_id)
+        if application is not None:
+            await refresh_application_status(session, application)
+
         await history.record(
             session, document.application_id, EventType.PARSE_DONE, "worker",
-            document_id=document_id, payload={"status": report.status.value},
+            document_id=document_id,
+            payload={"status": report.status.value, "provider": result.provider},
         )
         if report.status == DocStatus.FLAGGED:
             await history.record(
