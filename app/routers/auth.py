@@ -82,7 +82,15 @@ async def callback(
     if error or not code:
         return RedirectResponse(url="/auth/login")
 
-    token = await oauth.keycloak.authorize_access_token(request)
+    # id_token подписан с iss того адреса, через который прошёл браузер
+    # (может быть OIDC_PUBLIC_ISSUER, а не внутренний OIDC_ISSUER) — разрешаем
+    # оба варианта, остальные проверки (подпись, aud, exp, nonce) не меняются.
+    allowed_iss = {settings.oidc_issuer}
+    if settings.oidc_public_issuer:
+        allowed_iss.add(settings.oidc_public_issuer)
+    token = await oauth.keycloak.authorize_access_token(
+        request, claims_options={"iss": {"values": list(allowed_iss)}}
+    )
     claims = _jwt_claims(token["access_token"])
     roles = claims.get("realm_access", {}).get("roles", [])
 
