@@ -1,3 +1,93 @@
 {% extends "base.html" %}
-{# TODO(Кирилл): список операторов + форма создания (Keycloak Admin API). #}
-{% block content %}{% endblock %}
+
+{% block title %}Операторы — администрирование{% endblock %}
+
+{% block content %}
+  <script src="{{ url_for('static', path='/admin-operators.js') }}" defer></script>
+  <div class="operator-page">
+    <header class="operator-header">
+      <div>
+        <p class="eyebrow">Администрирование</p>
+        <h1>Операторы</h1>
+      </div>
+      <nav class="operator-nav" aria-label="Навигация">
+        <a href="/operator">Кабинет оператора</a>
+        <span class="operator-user">{{ user.username }}</span>
+      </nav>
+    </header>
+
+    <section class="admin-section" aria-labelledby="create-operator-title">
+      <h2 id="create-operator-title">Создать оператора</h2>
+      <form id="create-operator-form" class="admin-form" action="/api/admin/operators" method="post">
+        <div class="admin-form-field">
+          <label for="operator-username">Имя пользователя</label>
+          <input id="operator-username" name="username" type="text" minlength="3" maxlength="64" required autocomplete="username">
+        </div>
+        <div class="admin-form-field">
+          <label for="operator-email">Электронная почта</label>
+          <input id="operator-email" name="email" type="email" maxlength="254" required autocomplete="email">
+        </div>
+        <button class="button" type="submit">Создать</button>
+      </form>
+      <p id="operator-form-message" class="form-message" role="status" aria-live="polite"></p>
+      <div id="temporary-password-panel" class="temporary-password" role="alert" hidden>
+        <strong>Сохраните и передайте оператору</strong>
+        <p>Временный пароль будет показан только сейчас.</p>
+        <code id="temporary-password-value"></code>
+      </div>
+    </section>
+
+    <section class="admin-section" aria-labelledby="operators-list-title">
+      <h2 id="operators-list-title">Список операторов</h2>
+      {% if operators %}
+        <div class="table-scroll">
+          <table class="applications-table operators-table">
+            <thead>
+              <tr>
+                <th scope="col">Имя пользователя</th>
+                <th scope="col">Электронная почта</th>
+                <th scope="col">Статус</th>
+                <th scope="col">Создан</th>
+              </tr>
+            </thead>
+            <tbody id="operators-table-body">
+              {% for operator in operators %}
+                <tr>
+                  <td>{{ operator.username }}</td>
+                  <td>{{ operator.email or '—' }}</td>
+                  <td>
+                    {% if operator.enabled %}
+                      <span class="operator-status operator-status-enabled">Активен</span>
+                    {% else %}
+                      <span class="operator-status operator-status-disabled">Отключён</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if operator.created_at %}
+                      <time datetime="{{ operator.created_at.isoformat() }}">{{ operator.created_at.strftime('%d.%m.%Y %H:%M') }}</time>
+                    {% else %}—{% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p id="operators-empty-state" class="empty-state">Операторов пока нет.</p>
+        <div class="table-scroll">
+          <table class="applications-table operators-table" hidden>
+            <thead>
+              <tr>
+                <th scope="col">Имя пользователя</th>
+                <th scope="col">Электронная почта</th>
+                <th scope="col">Статус</th>
+                <th scope="col">Создан</th>
+              </tr>
+            </thead>
+            <tbody id="operators-table-body"></tbody>
+          </table>
+        </div>
+      {% endif %}
+    </section>
+  </div>
+{% endblock %}

@@ -1,3 +1,120 @@
 {% extends "base.html" %}
-{# TODO(Кирилл): список заявок, фильтры страна/статус/поиск. #}
-{% block content %}{% endblock %}
+
+{% block title %}Заявки — кабинет оператора{% endblock %}
+
+{% block content %}
+  <div class="operator-page">
+    <header class="operator-header">
+      <div>
+        <p class="eyebrow">Кабинет оператора</p>
+        <h1>Заявки</h1>
+      </div>
+      <nav class="operator-nav" aria-label="Навигация оператора">
+        <a href="/operator/queue">Очередь</a>
+        <span class="operator-user">{{ user.username }}</span>
+      </nav>
+    </header>
+
+    <form
+      class="application-filters"
+      action="/operator"
+      method="get"
+      hx-get="/operator"
+      hx-trigger="change, keyup changed delay:400ms from:[name=q]"
+      hx-target="#application-results"
+      hx-select="#application-results"
+      hx-swap="outerHTML"
+    >
+      <div class="filter-field">
+        <label for="filter-country">Страна</label>
+        <select id="filter-country" name="country">
+          <option value="">Все страны</option>
+          <option value="ru" {% if request.query_params.get('country') == 'ru' %}selected{% endif %}>Россия</option>
+          <option value="uz" {% if request.query_params.get('country') == 'uz' %}selected{% endif %}>Узбекистан</option>
+          <option value="eu" {% if request.query_params.get('country') == 'eu' %}selected{% endif %}>Европа (ЕС)</option>
+        </select>
+      </div>
+
+      <div class="filter-field">
+        <label for="filter-status">Статус</label>
+        <select id="filter-status" name="status">
+          <option value="">Все статусы</option>
+          <option value="accepted" {% if request.query_params.get('status') == 'accepted' %}selected{% endif %}>Принята</option>
+          <option value="processing" {% if request.query_params.get('status') == 'processing' %}selected{% endif %}>В обработке</option>
+          <option value="done" {% if request.query_params.get('status') == 'done' %}selected{% endif %}>Готова</option>
+          <option value="error" {% if request.query_params.get('status') == 'error' %}selected{% endif %}>Ошибка</option>
+          <option value="flagged" {% if request.query_params.get('status') == 'flagged' %}selected{% endif %}>Требует внимания</option>
+        </select>
+      </div>
+
+      <div class="filter-field filter-search">
+        <label for="filter-q">Поиск по ФИО</label>
+        <input
+          id="filter-q"
+          type="search"
+          name="q"
+          value="{{ request.query_params.get('q', '') }}"
+          placeholder="Введите ФИО"
+          autocomplete="off"
+        >
+      </div>
+
+      <button class="button" type="submit">Применить</button>
+    </form>
+
+    <section id="application-results" aria-label="Список заявок">
+      <p class="results-count">Найдено заявок: {{ data.total }}</p>
+      {% if data.items %}
+        <div class="table-scroll">
+          <table class="applications-table">
+            <thead>
+              <tr>
+                <th scope="col">Страна</th>
+                <th scope="col">Статус</th>
+                <th scope="col">Документы: готово / ошибки / замечания</th>
+                <th scope="col">Обновлена</th>
+                <th scope="col"><span class="visually-hidden">Открыть заявку</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in data.items %}
+                <tr>
+                  <td>
+                    {% if item.country.value == 'ru' %}Россия
+                    {% elif item.country.value == 'uz' %}Узбекистан
+                    {% elif item.country.value == 'eu' %}Европа (ЕС)
+                    {% else %}{{ item.country }}{% endif %}
+                  </td>
+                  <td>
+                    {% if item.status.value == 'created' %}Создана
+                    {% elif item.status.value == 'processing' %}В обработке
+                    {% elif item.status.value == 'done' %}Готова
+                    {% else %}{{ item.status }}{% endif %}
+                  </td>
+                  <td>
+                    <span class="document-counts">
+                      <span title="Готово">{{ item.documents_done }}</span>
+                      <span aria-hidden="true">/</span>
+                      <span title="Ошибки">{{ item.documents_error }}</span>
+                      <span aria-hidden="true">/</span>
+                      <span title="Замечания">{{ item.documents_flagged }}</span>
+                    </span>
+                  </td>
+                  <td><time datetime="{{ item.updated_at.isoformat() }}">{{ item.updated_at.strftime('%d.%m.%Y %H:%M') }}</time></td>
+                  <td class="application-actions">
+                    {% if item.has_mismatch %}
+                      <span class="badge badge-warning">Расхождение ФИО/дат</span>
+                    {% endif %}
+                    <a class="application-link" href="/operator/applications/{{ item.id }}">Открыть</a>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p class="empty-state">Заявки не найдены.</p>
+      {% endif %}
+    </section>
+  </div>
+{% endblock %}
