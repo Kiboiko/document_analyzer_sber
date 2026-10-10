@@ -43,3 +43,8 @@ Thumbs.db
 # --- IDE ---
 .idea/
 .vscode/
+
+*.jpeg
+*.jpg
+*.png
+*.pdf
