@@ -13,6 +13,7 @@ import httpx
 
 from app.config import settings
 from app.model.providers import (
+    SERVICE_DOWN_MESSAGE,
     LLMResult,
     ProviderError,
     describe_http_error,
@@ -23,7 +24,7 @@ from app.model.providers import (
 log = logging.getLogger(__name__)
 
 NAME = "local"
-_MODEL_DOWN = "Сервис распознавания временно недоступен. Мы повторим попытку позже."
+_MODEL_DOWN = SERVICE_DOWN_MESSAGE
 
 _SYSTEM = (
     "Ты извлекаешь поля из текста документа. "

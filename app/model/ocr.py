@@ -21,7 +21,7 @@ import logging
 import httpx
 
 from app.config import settings
-from app.model.providers import ProviderError, describe_http_error
+from app.model.providers import SERVICE_DOWN_MESSAGE, ProviderError, describe_http_error
 
 log = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ class OcrError(ProviderError):
 
 #: Что показать соискателю при сбое самого сервиса: в нём мы не виноваты и
 #: он не должен гадать, что с его файлом.
-_SERVICE_DOWN = "Сервис распознавания временно недоступен. Мы повторим попытку позже."
+_SERVICE_DOWN = SERVICE_DOWN_MESSAGE
 
 _EXT_BY_MIME = {
     "image/jpeg": ".jpg",

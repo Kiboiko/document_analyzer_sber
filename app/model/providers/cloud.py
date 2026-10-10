@@ -11,6 +11,7 @@ import httpx
 
 from app.config import settings
 from app.model.providers import (
+    SERVICE_DOWN_MESSAGE,
     LLMResult,
     ProviderError,
     describe_http_error,
@@ -21,7 +22,7 @@ from app.model.providers import (
 log = logging.getLogger(__name__)
 
 NAME = "cloud"
-_MODEL_DOWN = "Сервис распознавания временно недоступен. Мы повторим попытку позже."
+_MODEL_DOWN = SERVICE_DOWN_MESSAGE
 
 #: Системная инструкция: роль модели — извлечь, а не рассуждать.
 _SYSTEM = (
@@ -37,7 +38,14 @@ def _base_url() -> str:
 
 def _headers() -> dict[str, str]:
     if not settings.ilons_api_key:
-        raise ProviderError("ILONS_API_KEY не задан: cloud-провайдер недоступен")
+        # Наша настройка, а не вина соискателя. Повтор не поможет, пока ключ не
+        # задан, поэтому retryable=False: пусть ошибка будет видна сразу, а
+        # после правки .env документ можно разобрать заново.
+        raise ProviderError(
+            "ILONS_API_KEY не задан: cloud-провайдер недоступен",
+            retryable=False,
+            user_message=_MODEL_DOWN,
+        )
     return {
         "Authorization": f"Bearer {settings.ilons_api_key}",
         "Content-Type": "application/json",

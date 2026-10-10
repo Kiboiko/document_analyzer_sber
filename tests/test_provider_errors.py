@@ -299,8 +299,34 @@ async def main():
     try:
         await expect_provider_error("cloud: ILONS_API_KEY пуст",
                                     make_handler("cloud", "prose"), "ILONS_API_KEY")
+        # Наша настройка: повтор не поможет, а соискателю нельзя показывать имена
+        # переменных окружения.
+        try:
+            with patched(make_handler("cloud", "prose")):
+                await recognize(DocType.PASSPORT_RF, jpeg())
+        except ProviderError as exc:
+            check("ILONS_API_KEY пуст: retryable=False", exc.retryable is False)
+            check("ILONS_API_KEY пуст: в user_message нет имён переменных",
+                  "ILONS" not in (exc.user_message or "") and bool(exc.user_message),
+                  exc.user_message or "")
     finally:
         settings.ilons_api_key = saved
+
+    print("\n=== Ошибки конфигурации: неверный MODEL_PROVIDER, нет промпта")
+    settings.model_provider = "нечто"
+    try:
+        with patched(make_handler("cloud", "prose")):
+            await recognize(DocType.PASSPORT_RF, jpeg())
+        check("неверный MODEL_PROVIDER -> ошибка", False, "исключения не было")
+    except ProviderError as exc:
+        check("неверный MODEL_PROVIDER: текст про переменную в журнале",
+              "MODEL_PROVIDER" in str(exc), str(exc)[:80])
+        check("неверный MODEL_PROVIDER: user_message задан, retryable=False",
+              bool(exc.user_message) and exc.retryable is False)
+        check("неверный MODEL_PROVIDER: соискатель не видит имя переменной",
+              "MODEL_PROVIDER" not in (exc.user_message or ""))
+    finally:
+        settings.model_provider = "cloud"
 
     print("\n=== local: лимит токенов передаётся в Ollama")
     seen = {}

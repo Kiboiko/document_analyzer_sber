@@ -16,7 +16,7 @@ from types import ModuleType
 from app.config import settings
 from app.enums import EXTRACTED_FIELDS, DocType
 from app.model import ocr
-from app.model.providers import ProviderError
+from app.model.providers import SERVICE_DOWN_MESSAGE, ProviderError
 from app.model.validate import normalize_fields
 from app.schemas import ExtractResult
 
@@ -34,9 +34,18 @@ def load_prompt(doc_type: DocType) -> str:
     try:
         text = path.read_text(encoding="utf-8").strip()
     except OSError as exc:
-        raise ProviderError(f"не прочитать промпт {path.name}: {exc}") from exc
+        # Ошибки конфигурации и сборки: повтор не поможет, а соискатель ни при чём.
+        raise ProviderError(
+            f"не прочитать промпт {path.name}: {exc}",
+            retryable=False,
+            user_message=SERVICE_DOWN_MESSAGE,
+        ) from exc
     if not text:
-        raise ProviderError(f"промпт {path.name} пуст")
+        raise ProviderError(
+            f"промпт {path.name} пуст",
+            retryable=False,
+            user_message=SERVICE_DOWN_MESSAGE,
+        )
     return text
 
 
@@ -55,7 +64,9 @@ def get_provider() -> ModuleType:
 
         return local
     raise ProviderError(
-        f"MODEL_PROVIDER={settings.model_provider!r}: ожидается 'cloud' или 'local'"
+        f"MODEL_PROVIDER={settings.model_provider!r}: ожидается 'cloud' или 'local'",
+        retryable=False,
+        user_message=SERVICE_DOWN_MESSAGE,
     )
 
 
