@@ -1,3 +1,65 @@
 {% extends "base.html" %}
-{# TODO(Кирилл): раздел «в работе» — счётчики очереди. #}
-{% block content %}{% endblock %}
+
+{% block title %}Очередь — кабинет оператора{% endblock %}
+
+{% block content %}
+  <section
+    class="operator-page queue-page"
+    hx-get="/operator/queue"
+    hx-trigger="every 5s"
+    hx-swap="outerHTML"
+    aria-live="polite"
+  >
+    <header class="operator-header">
+      <div>
+        <p class="eyebrow">Кабинет оператора</p>
+        <h1>Очередь разбора</h1>
+      </div>
+      <nav class="operator-nav" aria-label="Навигация оператора">
+        <a href="/operator">Заявки</a>
+        <span class="operator-user">{{ user.username }}</span>
+      </nav>
+    </header>
+
+    <dl class="queue-counters">
+      <div class="queue-counter">
+        <dt>Ждут разбора</dt>
+        <dd>{{ stats.pending if stats.pending is not none else '—' }}</dd>
+      </div>
+      <div class="queue-counter">
+        <dt>В разборе</dt>
+        <dd>{{ stats.processing if stats.processing is not none else '—' }}</dd>
+      </div>
+      <div class="queue-counter queue-counter-error">
+        <dt>Ошибок</dt>
+        <dd>{{ stats.failed if stats.failed is not none else '—' }}</dd>
+      </div>
+      <div class="queue-counter queue-counter-success">
+        <dt>Готово за час</dt>
+        <dd>{{ stats.done_last_hour if stats.done_last_hour is not none else '—' }}</dd>
+      </div>
+    </dl>
+
+    <section class="queue-details" aria-label="Дополнительная статистика очереди">
+      {% if stats.avg_duration_s is not none %}
+        <div class="queue-detail">
+          <h2>Среднее время разбора</h2>
+          <p>{{ stats.avg_duration_s|round(1) }} с</p>
+        </div>
+      {% endif %}
+      {% if stats.oldest_pending_age_s is not none %}
+        <div class="queue-detail">
+          <h2>Возраст самой старой ожидающей задачи</h2>
+          <p>
+            {% set age_s = stats.oldest_pending_age_s|int %}
+            {% if age_s < 60 %}{{ age_s }} сек.
+            {% elif age_s < 3600 %}{{ (age_s // 60) }} мин.
+            {% else %}{{ (age_s // 3600) }} ч. {{ ((age_s % 3600) // 60) }} мин.{% endif %}
+          </p>
+        </div>
+      {% endif %}
+    </section>
+
+    <p class="queue-refresh-note">Данные обновляются автоматически каждые 5 секунд.</p>
+  </section>
+{% endblock %}

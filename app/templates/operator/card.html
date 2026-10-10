@@ -1,3 +1,158 @@
 {% extends "base.html" %}
-{# TODO(Кирилл): оригинал рядом с полями, правка поля, замечания, reparse, таймлайн. #}
-{% block content %}{% endblock %}
+
+{% block title %}Заявка {{ card.id }} — кабинет оператора{% endblock %}
+
+{% block content %}
+  <script src="{{ url_for('static', path='/json-enc.js') }}" defer></script>
+  <div class="operator-page">
+    <header class="operator-header">
+      <div>
+        <p class="eyebrow">Кабинет оператора</p>
+        <h1>Заявка</h1>
+        <p class="card-meta">
+          {% if card.country.value == 'ru' %}Россия
+          {% elif card.country.value == 'uz' %}Узбекистан
+          {% elif card.country.value == 'eu' %}Европа (ЕС)
+          {% else %}{{ card.country }}{% endif %}
+          <span aria-hidden="true">·</span>
+          {% if card.status.value == 'created' %}Создана
+          {% elif card.status.value == 'processing' %}В обработке
+          {% elif card.status.value == 'done' %}Готова
+          {% else %}{{ card.status }}{% endif %}
+          <span aria-hidden="true">·</span>
+          Создана <time datetime="{{ card.created_at.isoformat() }}">{{ card.created_at.strftime('%d.%m.%Y %H:%M') }}</time>
+        </p>
+      </div>
+      <nav class="operator-nav" aria-label="Навигация оператора">
+        <a href="/operator">К списку заявок</a>
+        <a href="/operator/queue">Очередь</a>
+        <span class="operator-user">{{ user.username }}</span>
+      </nav>
+    </header>
+
+    {% if card.missing_documents %}
+      <aside class="notice notice-warning" role="alert">
+        <strong>Не хватает документов:</strong>
+        {% for doc_type in card.missing_documents %}
+          {% if doc_type.value == 'passport_rf' %}Паспорт РФ
+          {% elif doc_type.value == 'snils' %}СНИЛС
+          {% elif doc_type.value == 'inn' %}ИНН
+          {% elif doc_type.value == 'passport_uz' %}Паспорт гражданина Узбекистана
+          {% elif doc_type.value == 'migration_card' %}Миграционная карта
+          {% elif doc_type.value == 'patent' %}Патент на работу
+          {% elif doc_type.value == 'eu_id' %}Удостоверение личности / загранпаспорт ЕС
+          {% elif doc_type.value == 'residence_permit' %}Вид на жительство
+          {% else %}{{ doc_type }}{% endif %}{% if not loop.last %}, {% endif %}
+        {% endfor %}
+      </aside>
+    {% endif %}
+
+    {% for check in card.cross_checks if check.status.value == 'mismatch' %}
+      <aside class="notice notice-warning" role="alert">
+        <strong>
+          {% if check.kind.value == 'fio' %}Расхождение в ФИО
+          {% elif check.kind.value == 'date' %}Расхождение в датах
+          {% else %}Расхождение в документах{% endif %}
+        </strong>
+        {% if check.detail %}<p>{{ check.detail }}</p>{% endif %}
+        <time datetime="{{ check.updated_at.isoformat() }}">{{ check.updated_at.strftime('%d.%m.%Y %H:%M') }}</time>
+      </aside>
+    {% endfor %}
+
+    <section class="document-list" aria-label="Документы заявки">
+      {% for document in card.documents %}
+        <article class="document-card">
+          <header class="document-header">
+            <div>
+              <h2>{{ document.title or document.doc_type }}</h2>
+              <p class="document-status">
+                {% if document.status.value == 'accepted' %}Принят
+                {% elif document.status.value == 'processing' %}В обработке
+                {% elif document.status.value == 'done' %}Разобран
+                {% elif document.status.value == 'error' %}Ошибка
+                {% elif document.status.value == 'flagged' %}Требует внимания
+                {% else %}{{ document.status }}{% endif %}
+              </p>
+              {% if document.error_reason %}
+                <p class="notice notice-error">{{ document.error_reason }}</p>
+              {% endif %}
+            </div>
+            <form
+              class="reparse-form"
+              hx-post="/api/operator/documents/{{ document.id }}/reparse"
+              hx-swap="none"
+            >
+              <button class="button" type="submit">Повторный разбор</button>
+            </form>
+          </header>
+
+          {% if document.files %}
+            <ul class="document-files" aria-label="Загруженные файлы">
+              {% for file in document.files %}
+                <li>
+                  <span>{{ file.orig_name }}</span>
+                  <span class="file-meta">{{ file.mime }} · {{ (file.size / 1024)|round|int }} КБ</span>
+                </li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+
+          {% if document.fields %}
+            <div class="field-list">
+              {% for field in document.fields %}
+                <form
+                  class="field-editor{% if not field.is_valid %} field-editor-invalid{% endif %}"
+                  hx-patch="/api/operator/documents/{{ document.id }}/fields/{{ field.id }}"
+                  hx-ext="json-enc"
+                  hx-swap="none"
+                >
+                  <label for="field-{{ field.id }}">{{ field.title or field.name }}</label>
+                  <div class="field-input-row">
+                    <input
+                      id="field-{{ field.id }}"
+                      type="text"
+                      name="value"
+                      value="{{ field.value or '' }}"
+                      autocomplete="off"
+                      aria-invalid="{{ 'true' if not field.is_valid else 'false' }}"
+                      {% if not field.is_valid and field.validation_msg %}aria-describedby="field-error-{{ field.id }}"{% endif %}
+                    >
+                    <button class="button button-secondary" type="submit">Сохранить</button>
+                  </div>
+                  {% if not field.is_valid and field.validation_msg %}
+                    <p class="validation-message" id="field-error-{{ field.id }}">{{ field.validation_msg }}</p>
+                  {% endif %}
+                  <p class="field-meta">
+                    {% if field.source.value == 'operator' %}Изменено оператором{% else %}Распознано моделью{% endif %}
+                    {% if field.confidence is not none %} · Уверенность: {{ (field.confidence * 100)|round|int }}%{% endif %}
+                  </p>
+                </form>
+              {% endfor %}
+            </div>
+          {% else %}
+            <p class="empty-state">Поля пока не распознаны.</p>
+          {% endif %}
+        </article>
+      {% else %}
+        <p class="empty-state">В заявке пока нет документов.</p>
+      {% endfor %}
+    </section>
+
+    <section class="timeline-section" aria-labelledby="timeline-title">
+      <h2 id="timeline-title">История заявки</h2>
+      {% if card.events %}
+        <ol class="timeline">
+          {% for event in card.events|sort(attribute='created_at') %}
+            <li class="timeline-item">
+              <time datetime="{{ event.created_at.isoformat() }}">{{ event.created_at.strftime('%d.%m.%Y %H:%M:%S') }}</time>
+              <strong>{{ event.type.value }}</strong>
+              <span>— {{ event.actor }}</span>
+            </li>
+          {% endfor %}
+        </ol>
+      {% else %}
+        <p class="empty-state">Событий пока нет.</p>
+      {% endif %}
+    </section>
+  </div>
+{% endblock %}
