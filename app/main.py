@@ -7,8 +7,13 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from urllib.parse import quote
+
+from fastapi import FastAPI, Request
+from fastapi.exception_handlers import http_exception_handler
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -57,6 +62,15 @@ app.include_router(admin.router)
 app.include_router(operator.router)
 app.include_router(files.router)
 app.include_router(public.router)
+
+
+@app.exception_handler(StarletteHTTPException)
+async def login_redirect(request: Request, exc: StarletteHTTPException):
+    # Страницы кабинета без входа ведут на Keycloak; /api/* остаётся 401 для htmx и проверок.
+    path = request.url.path
+    if exc.status_code == 401 and not path.startswith("/api/"):
+        return RedirectResponse(f"/auth/login?next={quote(path)}", status_code=303)
+    return await http_exception_handler(request, exc)
 
 
 @app.get("/health", response_model=HealthOut, tags=["infra"])

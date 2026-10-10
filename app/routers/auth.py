@@ -104,7 +104,10 @@ async def callback(
     request.session["id_token"] = token.get("id_token")
 
     next_url = request.session.pop("next", "/operator")
-    return RedirectResponse(url=next_url)
+    # Только локальный путь: `next` приходит из query и иначе дал бы open redirect.
+    if not next_url.startswith("/") or next_url.startswith("//") or "\\" in next_url:
+        next_url = "/operator"
+    return RedirectResponse(url=next_url, status_code=303)
 
 
 @router.get("/logout")
