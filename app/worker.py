@@ -21,7 +21,7 @@ from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.db import dispose_engine, session_factory
-from app.enums import EXTRACTED_FIELDS, DocStatus, EventType, FieldSource
+from app.enums import DOC_TYPE_TITLES, EXTRACTED_FIELDS, DocStatus, EventType, FieldSource
 from app.model import ProviderError, recognize
 from app.model.validate import missing_reason, validate_document
 from app.models import Application, Document, Field, Job
@@ -217,9 +217,18 @@ async def process_job(job: Job) -> None:
         _apply_fields(document, result, report)
         document.status = report.status
         if report.status == DocStatus.ERROR:
-            document.error_reason = missing_reason(
-                document.doc_type, report.missing_required
-            )
+            if not any(v not in (None, "") for v in result.fields.values()):
+                # Ни одного поля: чаще всего загружен не тот документ
+                # (промпты велят вернуть null для чужого документа).
+                document.error_reason = (
+                    f"На фото не нашлось данных документа «{DOC_TYPE_TITLES[document.doc_type]}». "
+                    "Проверьте, что загружен нужный документ, и сфотографируйте его "
+                    "целиком при хорошем свете."
+                )
+            else:
+                document.error_reason = missing_reason(
+                    document.doc_type, report.missing_required
+                )
         else:
             document.error_reason = "; ".join(report.notes) if report.notes else None
 
