@@ -1,0 +1,7 @@
+# Единые переводы строк: иначе на двух Windows-машинах будут ложные диффы.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.pdf binary
+*.docx binary

@@ -1,0 +1,45 @@
+# --- секреты ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- окружения Python ---
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# --- данные сервиса (файлы соискателей, дампы БД) ---
+data/
+workspace/
+*.sqlite3
+*.db
+
+# --- lock-мусор и временные ---
+*.lock
+!poetry.lock
+*.log
+*.tmp
+*.bak
+*.orig
+*.rej
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# --- IDE ---
+.idea/
+.vscode/

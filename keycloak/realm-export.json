@@ -1,0 +1,27 @@
+{
+  "realm": "docs",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "roles": {
+    "realm": [
+      { "name": "admin", "description": "Администратор: создаёт операторов" },
+      { "name": "operator", "description": "Оператор: проверка и правка полей" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "docs-app",
+      "name": "Document analyzer",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "redirectUris": ["http://localhost:8000/auth/callback"],
+      "webOrigins": ["http://localhost:8000"]
+    }
+  ],
+  "users": []
+}
