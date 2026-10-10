@@ -16,6 +16,7 @@
       "enabled": true,
       "protocol": "openid-connect",
       "publicClient": false,
+      "secret": "dev-only-docs-app-secret",
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": true,
@@ -23,5 +24,18 @@
       "webOrigins": ["http://localhost:8000"]
     }
   ],
-  "users": []
+  "users": [
+    {
+      "username": "admin1",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "admin1@example.local",
+      "firstName": "Admin",
+      "lastName": "Bootstrap",
+      "credentials": [
+        { "type": "password", "value": "admin1", "temporary": true }
+      ],
+      "realmRoles": ["admin"]
+    }
+  ]
 }
