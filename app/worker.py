@@ -150,17 +150,68 @@ async def process_job(job: Job) -> None:
 
 async def reaper_loop(stop: asyncio.Event) -> None:
     """Периодически возвращать зависшие processing в pending."""
-    raise NotImplementedError  # TODO(Кирилл)
+    interval = max(settings.job_lock_timeout_s / 2, settings.worker_poll_interval_s)
+    while not stop.is_set():
+        async with session_factory() as session:
+            n = await queue.reap_stale(session)
+            if n:
+                log.info("реапер: возвращено в pending задач: %s", n)
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=interval)
+        except TimeoutError:
+            pass
 
 
 async def worker_loop(stop: asyncio.Event) -> None:
     """Опрашивать очередь и запускать разбор под семафором."""
-    raise NotImplementedError  # TODO(Кирилл)
+    tasks: set[asyncio.Task] = set()
+
+    async def _run(job: Job) -> None:
+        try:
+            await process_job(job)
+        except Exception:
+            log.exception("process_job упал для job %s", job.id)
+
+    while not stop.is_set():
+        async with session_factory() as session:
+            job = await queue.claim_next(session, worker_id())
+
+        if job is None:
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=settings.worker_poll_interval_s)
+            except TimeoutError:
+                pass
+            continue
+
+        task = asyncio.create_task(_run(job))
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
+
+        if len(tasks) >= settings.worker_concurrency:
+            await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def main() -> None:
     """Точка входа: реапер на старте, затем циклы до сигнала остановки."""
-    raise NotImplementedError  # TODO(Кирилл)
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, stop.set)
+        except NotImplementedError:
+            pass  # Windows: сигналы недоступны через event loop
+
+    async with session_factory() as session:
+        n = await queue.reap_stale(session)
+    log.info("воркер %s запущен (реапер вернул %s задач)", worker_id(), n)
+
+    try:
+        await asyncio.gather(worker_loop(stop), reaper_loop(stop))
+    finally:
+        await dispose_engine()
 
 
 if __name__ == "__main__":
