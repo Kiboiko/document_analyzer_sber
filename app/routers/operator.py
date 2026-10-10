@@ -266,7 +266,31 @@ async def patch_field(
     session: AsyncSession = Depends(get_session),
 ) -> FieldOut:
     """Правка поля: source=operator, перепроверка правил, Event(field_corrected)."""
-    raise NotImplementedError  # TODO(Кирилл)
+    field = await session.get(Field, field_id)
+    if field is None or field.document_id != document_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "поле не найдено")
+
+    document = await session.get(Document, document_id)
+    if document is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "документ не найден")
+
+    verdict = validate.validate_field(document.doc_type, field.name, payload.value)
+    field.value = payload.value
+    field.source = FieldSource.OPERATOR
+    field.is_valid = verdict.is_valid
+    field.validation_msg = verdict.message
+
+    await history.record(
+        session,
+        application_id=document.application_id,
+        type=EventType.FIELD_CORRECTED,
+        actor=user.username,
+        document_id=document_id,
+        payload={"field": field.name, "value": payload.value},
+    )
+    await session.commit()
+
+    return _field_out(field)
 
 
 @router.post(
@@ -279,7 +303,23 @@ async def reparse_document(
     session: AsyncSession = Depends(get_session),
 ) -> ReparseResult:
     """Повторный разбор: новый Job(pending) + Event(reparse_requested)."""
-    raise NotImplementedError  # TODO(Кирилл)
+    document = await session.get(Document, document_id)
+    if document is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "документ не найден")
+
+    job = await queue.enqueue(session, document_id)
+    document.status = DocStatus.ACCEPTED
+    document.error_reason = None
+    await history.record(
+        session,
+        application_id=document.application_id,
+        type=EventType.REPARSE_REQUESTED,
+        actor=user.username,
+        document_id=document_id,
+    )
+    await session.commit()
+
+    return ReparseResult(document_id=document_id, job_id=job.id, status=job.status)
 
 
 @router.get("/api/operator/queue", response_model=QueueStats)
@@ -288,4 +328,4 @@ async def queue_stats(
     session: AsyncSession = Depends(get_session),
 ) -> QueueStats:
     """Счётчики очереди: ждёт / в разборе / среднее время."""
-    raise NotImplementedError  # TODO(Кирилл)
+    return await queue.stats(session)
