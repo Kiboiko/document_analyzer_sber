@@ -7,9 +7,14 @@ import json
 import os
 import sys
 
-os.environ.setdefault("OLMOCR_SERVER", "http://olmocr.test/v1")
-os.environ.setdefault("ILONS_API_KEY", "test-key")
-os.environ.setdefault("LLM_BASE_URL", "https://llm.test")
+# Мок-тесты не должны зависеть от локального .env разработчика (там может быть
+# настоящий адрес сервера, ключ или MODEL_PROVIDER=local): переменные процесса
+# приоритетнее .env, поэтому задаём их жёстко, а не через setdefault.
+os.environ["OLMOCR_SERVER"] = "http://olmocr.test/v1"
+os.environ["ILONS_API_KEY"] = "test-key"
+os.environ["LLM_BASE_URL"] = "https://llm.test"
+os.environ["MODEL_PROVIDER"] = "cloud"
+os.environ["LLM_MAX_TOKENS"] = "2000"
 
 import httpx
 from PIL import Image
