@@ -1,30 +1,41 @@
 {% extends "base.html" %}
 {% block title %}Загрузка документов{% endblock %}
+{% block main_class %}page page-narrow{% endblock %}
 
 {% block content %}
-<h1>Документы для трудоустройства</h1>
+<ol class="steps" aria-label="Шаги">
+  <li class="is-current"><span>1</span> Страна</li>
+  <li><span>2</span> Фото документов</li>
+  <li><span>3</span> Проверка</li>
+</ol>
+
+<h1>Загрузите документы для трудоустройства</h1>
 <p class="lead">
-  Выберите страну — покажем, какие документы нужны, и примем их фотографии.
-  Регистрация не нужна: вы получите личную ссылку на свою заявку.
+  Это займёт пару минут. Регистрироваться не нужно — после выбора страны
+  вы получите личную ссылку на свою заявку.
 </p>
 
-<form method="post" action="/start" class="card">
+<form method="post" action="/start" class="panel">
   <fieldset>
-    <legend>Страна</legend>
+    <legend>Какое у вас гражданство?</legend>
+    <p class="hint">От страны зависит, какие документы понадобятся.</p>
     {% for value, title in countries %}
       <label class="choice">
         <input type="radio" name="country" value="{{ value.value }}"
                {% if loop.first %}checked{% endif %}>
-        <span>{{ title }}</span>
-        <small>
-          {% for _, doc_title in required[value.value] %}
-            {{ doc_title }}{% if not loop.last %} · {% endif %}
-          {% endfor %}
-        </small>
+        <span class="choice-body">
+          <span class="choice-title">{{ title }}</span>
+          <span class="choice-docs">
+            Понадобятся:
+            {% for _, doc_title in required[value.value] %}
+              {{ doc_title }}{% if not loop.last %}, {% endif %}
+            {% endfor %}
+          </span>
+        </span>
       </label>
     {% endfor %}
   </fieldset>
 
-  <button type="submit" class="primary">Продолжить</button>
+  <button type="submit" class="button button-primary button-block">Продолжить</button>
 </form>
 {% endblock %}

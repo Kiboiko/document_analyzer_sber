@@ -4,90 +4,86 @@
 
 {% block content %}
   <script src="{{ url_for('static', path='/admin-operators.js') }}" defer></script>
-  <div class="operator-page">
-    <header class="operator-header">
-      <div>
-        <p class="eyebrow">Администрирование</p>
-        <h1>Операторы</h1>
-      </div>
-      <nav class="operator-nav" aria-label="Навигация">
-        <a href="/operator">Кабинет оператора</a>
-        <span class="operator-user">{{ user.username }}</span>
-      </nav>
-    </header>
 
-    <section class="admin-section" aria-labelledby="create-operator-title">
-      <h2 id="create-operator-title">Создать оператора</h2>
-      <form id="create-operator-form" class="admin-form" action="/api/admin/operators" method="post">
-        <div class="admin-form-field">
-          <label for="operator-username">Имя пользователя</label>
-          <input id="operator-username" name="username" type="text" minlength="3" maxlength="64" required autocomplete="username">
+  <div class="page-head">
+    <div>
+      <h1>Операторы</h1>
+      <p class="lead">
+        Операторы — сотрудники, которые проверяют распознанные документы.
+        Здесь вы заводите им учётные записи.
+      </p>
+    </div>
+  </div>
+
+  <div class="admin-grid">
+    <section class="panel" aria-labelledby="create-title">
+      <h2 id="create-title">Добавить оператора</h2>
+      <ol class="mini-steps">
+        <li>Введите логин и почту сотрудника.</li>
+        <li>Мы покажем временный пароль — передайте его сотруднику.</li>
+        <li>Сотрудник входит на <code>{{ request.base_url }}operator</code> и задаёт свой пароль.</li>
+      </ol>
+
+      <form id="create-operator-form" class="form" action="/api/admin/operators" method="post">
+        <div class="form-field">
+          <label for="operator-username">Логин</label>
+          <input id="operator-username" name="username" type="text" minlength="3" maxlength="64"
+                 required autocomplete="off" placeholder="ivanova">
+          <small>Латиница, от 3 символов. С ним сотрудник будет входить.</small>
         </div>
-        <div class="admin-form-field">
+        <div class="form-field">
           <label for="operator-email">Электронная почта</label>
-          <input id="operator-email" name="email" type="email" maxlength="254" required autocomplete="email">
+          <input id="operator-email" name="email" type="email" maxlength="254"
+                 required autocomplete="off" placeholder="ivanova@agency.ru">
         </div>
-        <button class="button" type="submit">Создать</button>
+        <button class="button button-primary" type="submit">Создать оператора</button>
       </form>
+
       <p id="operator-form-message" class="form-message" role="status" aria-live="polite"></p>
-      <div id="temporary-password-panel" class="temporary-password" role="alert" hidden>
-        <strong>Сохраните и передайте оператору</strong>
-        <p>Временный пароль будет показан только сейчас.</p>
+
+      <div id="temporary-password-panel" class="callout callout-ok temporary-password" role="alert" hidden>
+        <strong>Оператор создан. Временный пароль:</strong>
         <code id="temporary-password-value"></code>
+        <p>Скопируйте и передайте сотруднику — второй раз пароль не покажем.
+          При первом входе система попросит его сменить.</p>
       </div>
     </section>
 
-    <section class="admin-section" aria-labelledby="operators-list-title">
-      <h2 id="operators-list-title">Список операторов</h2>
-      {% if operators %}
-        <div class="table-scroll">
-          <table class="applications-table operators-table">
-            <thead>
-              <tr>
-                <th scope="col">Имя пользователя</th>
-                <th scope="col">Электронная почта</th>
-                <th scope="col">Статус</th>
-                <th scope="col">Создан</th>
-              </tr>
-            </thead>
-            <tbody id="operators-table-body">
-              {% for operator in operators %}
-                <tr>
-                  <td>{{ operator.username }}</td>
-                  <td>{{ operator.email or '—' }}</td>
-                  <td>
-                    {% if operator.enabled %}
-                      <span class="operator-status operator-status-enabled">Активен</span>
-                    {% else %}
-                      <span class="operator-status operator-status-disabled">Отключён</span>
-                    {% endif %}
-                  </td>
-                  <td>
-                    {% if operator.created_at %}
-                      <time datetime="{{ operator.created_at.isoformat() }}">{{ operator.created_at.strftime('%d.%m.%Y %H:%M') }}</time>
-                    {% else %}—{% endif %}
-                  </td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      {% else %}
-        <p id="operators-empty-state" class="empty-state">Операторов пока нет.</p>
-        <div class="table-scroll">
-          <table class="applications-table operators-table" hidden>
-            <thead>
-              <tr>
-                <th scope="col">Имя пользователя</th>
-                <th scope="col">Электронная почта</th>
-                <th scope="col">Статус</th>
-                <th scope="col">Создан</th>
-              </tr>
-            </thead>
-            <tbody id="operators-table-body"></tbody>
-          </table>
-        </div>
+    <section class="panel" aria-labelledby="list-title">
+      <h2 id="list-title">Все операторы</h2>
+      {% if not operators %}
+        <p id="operators-empty-state" class="muted">Пока никого нет — добавьте первого оператора слева.</p>
       {% endif %}
+      <div class="table-wrap">
+        <table class="table" {% if not operators %}hidden{% endif %}>
+          <thead>
+            <tr>
+              <th scope="col">Логин</th>
+              <th scope="col">Почта</th>
+              <th scope="col">Статус</th>
+              <th scope="col">Создан</th>
+            </tr>
+          </thead>
+          <tbody id="operators-table-body">
+            {% for operator in operators %}
+              <tr>
+                <td><strong>{{ operator.username }}</strong></td>
+                <td>{{ operator.email or '—' }}</td>
+                <td>
+                  {% if operator.enabled %}
+                    <span class="operator-status operator-status-enabled">активен</span>
+                  {% else %}
+                    <span class="operator-status operator-status-disabled">отключён</span>
+                  {% endif %}
+                </td>
+                <td class="muted nowrap">
+                  {% if operator.created_at %}{{ operator.created_at.strftime('%d.%m.%Y %H:%M') }}{% else %}—{% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
     </section>
   </div>
 {% endblock %}

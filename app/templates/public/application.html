@@ -1,41 +1,58 @@
 {% extends "base.html" %}
 {% block title %}Моя заявка{% endblock %}
+{% block main_class %}page page-narrow{% endblock %}
 
 {% block content %}
+<ol class="steps" aria-label="Шаги">
+  {% set all_uploaded = status.documents and not status.missing_documents %}
+  <li class="is-done"><span>1</span> Страна</li>
+  <li class="{{ 'is-done' if all_uploaded else 'is-current' }}"><span>2</span> Фото документов</li>
+  <li class="{{ 'is-current' if all_uploaded else '' }}"><span>3</span> Проверка</li>
+</ol>
+
 <h1>Моя заявка</h1>
-<p class="lead">
-  Страна: <strong>{{ country_title }}</strong>.
-  Сохраните ссылку на эту страницу — по ней вы вернётесь к заявке и увидите
-  результат проверки.
-</p>
+<p class="lead">Гражданство: <strong>{{ country_title }}</strong></p>
+
+<div class="callout callout-info">
+  <strong>Сохраните ссылку на эту страницу.</strong>
+  По ней вы вернётесь к заявке и увидите результат проверки — входить никуда не нужно.
+  <div class="copy-row">
+    <input id="my-link" type="text" readonly value="{{ request.base_url }}a/{{ token }}" aria-label="Ссылка на заявку">
+    <button type="button" class="button button-secondary"
+            onclick="navigator.clipboard.writeText(document.getElementById('my-link').value).then(() => { this.textContent = 'Скопировано' })">
+      Скопировать
+    </button>
+  </div>
+</div>
 
 {% if error %}
-  <p class="alert error">{{ error }}</p>
+  <p class="callout callout-error">{{ error }}</p>
 {% endif %}
 
-<h2>Нужные документы</h2>
+<h2>Шаг 2. Загрузите фото документов</h2>
 <p class="hint">
-  Фотографируйте документ целиком, при хорошем свете, без блика.
-  До {{ max_files }} файлов за раз, каждый не больше {{ max_mb }} МБ.
-  Форматы: JPEG, PNG, WEBP, TIFF, PDF.
+  Снимайте документ целиком, при хорошем свете, без бликов и пальцев на тексте.
+  Если у документа несколько страниц — выберите все файлы сразу.
+  Форматы: JPEG, PNG, WEBP, TIFF, PDF; до {{ max_files }} файлов, каждый до {{ max_mb }} МБ.
 </p>
 
-{% for doc_type in status.required_documents %}
-  <form class="card upload" method="post"
-        action="/a/{{ token }}/upload" enctype="multipart/form-data">
-    <input type="hidden" name="doc_type" value="{{ doc_type.value }}">
-    <label class="doc-title" for="file-{{ doc_type.value }}">
-      {{ doc_titles[doc_type.value] }}
-    </label>
-    <input id="file-{{ doc_type.value }}" type="file" name="files"
-           accept="image/*,application/pdf" multiple required>
-    <button type="submit">Загрузить</button>
-  </form>
-{% endfor %}
+<div class="upload-list">
+  {% for doc_type in status.required_documents %}
+    <form class="panel upload" method="post"
+          action="/a/{{ token }}/upload" enctype="multipart/form-data">
+      <input type="hidden" name="doc_type" value="{{ doc_type.value }}">
+      <div class="upload-head">
+        <span class="upload-num">{{ loop.index }}</span>
+        <label class="upload-title" for="file-{{ doc_type.value }}">{{ doc_titles[doc_type.value] }}</label>
+      </div>
+      <input id="file-{{ doc_type.value }}" class="file-input" type="file" name="files"
+             accept="image/*,application/pdf" multiple required>
+      <button type="submit" class="button button-primary">Отправить</button>
+    </form>
+  {% endfor %}
+</div>
 
-<h2>Что уже загружено</h2>
-{# Фрагмент сам себя подменяет поллингом: следить за разбором вручную не нужно.
-   Правила обновления живут внутри _status.html, чтобы после подмены они
-   не терялись. #}
+<h2>Шаг 3. Результат проверки</h2>
+<p class="hint">Статус обновляется сам — страницу перезагружать не нужно.</p>
 {% include "public/_status.html" %}
 {% endblock %}

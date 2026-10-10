@@ -6,36 +6,56 @@
      {% if keep_polling %}hx-trigger="every 3s"{% endif %}
      hx-swap="outerHTML">
 
-  {% if not status.documents %}
-    <p class="hint">Пока ничего не загружено.</p>
+  {% set docs = status.documents %}
+  {% set busy = docs | selectattr('status.value', 'in', ['accepted', 'processing']) | list %}
+  {% set failed = docs | selectattr('status.value', 'equalto', 'error') | list %}
+  {% set flagged = docs | selectattr('status.value', 'equalto', 'flagged') | list %}
+
+  {% if not docs %}
+    <p class="callout">Пока ничего не загружено — начните с шага 2.</p>
+  {% elif failed %}
+    <p class="callout callout-error">
+      <strong>Нужно загрузить фото заново.</strong>
+      Не удалось распознать: {% for d in failed %}{{ d.title or d.doc_type.value }}{% if not loop.last %}, {% endif %}{% endfor %}.
+      Причина указана ниже.
+    </p>
+  {% elif busy %}
+    <p class="callout callout-info">
+      <span class="spinner" aria-hidden="true"></span>
+      <strong>Распознаём документы…</strong> Обычно это занимает до минуты.
+    </p>
+  {% elif status.missing_documents %}
+    <p class="callout callout-warn">
+      <strong>Осталось загрузить:</strong>
+      {% for doc_type in status.missing_documents %}{{ doc_titles[doc_type.value] }}{% if not loop.last %}, {% endif %}{% endfor %}.
+    </p>
+  {% else %}
+    <p class="callout callout-ok">
+      <strong>Готово, все документы получены и проверены.</strong>
+      {% if flagged %}По некоторым есть замечания — сотрудник агентства их посмотрит.{% endif %}
+      Больше ничего делать не нужно, с вами свяжутся.
+    </p>
   {% endif %}
 
-  {% for doc in status.documents %}
-    <article class="card doc status-{{ doc.status.value }}">
-      <header>
+  {% for doc in docs %}
+    <article class="panel doc-status">
+      <header class="doc-status-head">
         <h3>{{ doc.title or doc.doc_type.value }}</h3>
         <span class="badge badge-{{ doc.status.value }}">
-          {% if doc.status.value == 'accepted' %}принят, ждёт разбора
+          {% if doc.status.value == 'accepted' %}в очереди
           {% elif doc.status.value == 'processing' %}распознаём…
-          {% elif doc.status.value == 'done' %}готово
-          {% elif doc.status.value == 'flagged' %}готово, есть замечание
-          {% elif doc.status.value == 'error' %}не распознано
+          {% elif doc.status.value == 'done' %}проверен
+          {% elif doc.status.value == 'flagged' %}есть замечание
+          {% elif doc.status.value == 'error' %}не распознан
           {% endif %}
         </span>
       </header>
 
       {% if doc.error_reason %}
-        <p class="alert {{ 'error' if doc.status.value == 'error' else 'warn' }}">
+        <p class="note {{ 'note-error' if doc.status.value == 'error' else 'note-warn' }}">
           {{ doc.error_reason }}
+          {% if doc.status.value == 'error' %}<br>Загрузите более чёткое фото этого документа в шаге 2.{% endif %}
         </p>
-      {% endif %}
-
-      {% if doc.files %}
-        <ul class="files">
-          {% for file in doc.files %}
-            <li>{{ file.orig_name }} <small>{{ (file.size / 1024) | round | int }} КБ</small></li>
-          {% endfor %}
-        </ul>
       {% endif %}
 
       {% if doc.fields %}
@@ -53,15 +73,12 @@
           {% endfor %}
         </dl>
       {% endif %}
+
+      {% if doc.files %}
+        <p class="file-list">
+          Файлы: {% for file in doc.files %}{{ file.orig_name }}{% if not loop.last %}, {% endif %}{% endfor %}
+        </p>
+      {% endif %}
     </article>
   {% endfor %}
-
-  {% if status.missing_documents %}
-    <p class="alert warn">
-      Ещё не загружено:
-      {% for doc_type in status.missing_documents %}
-        {{ doc_titles[doc_type.value] }}{% if not loop.last %}, {% endif %}
-      {% endfor %}
-    </p>
-  {% endif %}
 </div>
