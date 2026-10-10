@@ -16,6 +16,11 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
+        # `.env.example` содержит только имена переменных, без значений
+        # (требование кейса). После `cp .env.example .env` там `DEBUG=`,
+        # `MAX_UPLOAD_MB=` и т.п.; пустую строку pydantic не примет ни как
+        # число, ни как bool. Пустое значение = «не задано», берём умолчание.
+        env_ignore_empty=True,
     )
 
     # --- общее ------------------------------------------------------------- #
