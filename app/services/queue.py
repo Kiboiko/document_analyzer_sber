@@ -7,24 +7,56 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
+from app.enums import JobStatus
 from app.models import Job
 from app.schemas import QueueStats
 
 
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 async def enqueue(session: AsyncSession, document_id: uuid.UUID) -> Job:
-    """Поставить задачу разбора документа в очередь (status=pending)."""
-    raise NotImplementedError  # TODO(Кирилл)
+    """Поставить задачу разбора документа в очередь (status=pending).
+
+    Коммит — на вызывающей стороне (часть общей транзакции приёма/reparse).
+    """
+    job = Job(document_id=document_id, status=JobStatus.PENDING)
+    session.add(job)
+    await session.flush()
+    return job
 
 
 async def claim_next(session: AsyncSession, worker_id: str) -> Job | None:
     """Взять одну задачу: SELECT ... FOR UPDATE SKIP LOCKED LIMIT 1.
 
-    Переводит в processing, ставит locked_at и worker_id в той же транзакции.
+    Переводит в processing, ставит locked_at и worker_id и сразу коммитит —
+    статус должен быть виден другим воркерам/реаперу немедленно.
     """
-    raise NotImplementedError  # TODO(Кирилл)
+    stmt = (
+        select(Job)
+        .where(Job.status == JobStatus.PENDING)
+        .order_by(Job.created_at)
+        .limit(1)
+        .with_for_update(skip_locked=True)
+    )
+    job = (await session.scalars(stmt)).first()
+    if job is None:
+        await session.commit()
+        return None
+
+    job.status = JobStatus.PROCESSING
+    job.locked_at = _utcnow()
+    job.worker_id = worker_id
+    job.started_at = _utcnow()
+    await session.commit()
+    return job
 
 
 async def mark_done(session: AsyncSession, job_id: uuid.UUID) -> None:
