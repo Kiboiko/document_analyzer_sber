@@ -66,7 +66,10 @@ async def complete_json(prompt: str, text: str) -> LLMResult:
         ],
         # Детерминированность важнее «красоты»: одинаковый вход — одинаковый выход.
         "temperature": 0.0,
-        "max_tokens": 1024,
+        # Qwen у ilons — reasoning-модель: сначала она тратит токены на
+        # рассуждения, и только потом пишет ответ. На тесном лимите бюджет
+        # уходит в рассуждения целиком, а content приходит пустым.
+        "max_tokens": settings.llm_max_tokens,
         "response_format": {"type": "json_object"},
     }
 
@@ -84,9 +87,33 @@ async def complete_json(prompt: str, text: str) -> LLMResult:
         raise ProviderError(f"ilons chat/completions: {exc}") from exc
 
     try:
-        content = data["choices"][0]["message"]["content"]
+        choice = data["choices"][0]
+        message = choice["message"]
     except (KeyError, IndexError, TypeError) as exc:
         raise ProviderError(f"неожиданная форма ответа ilons: {data}") from exc
+
+    # Ответ берём только из content. reasoning_content — это размышления
+    # модели, в них есть и черновые варианты полей, и JSON-подобный мусор;
+    # разбирать их как результат нельзя.
+    content = (message.get("content") or "").strip()
+    finish = choice.get("finish_reason")
+
+    if not content:
+        reasoning = (message.get("reasoning_content") or "").strip()
+        raise ProviderError(
+            "ilons вернул пустой content"
+            + (f" (finish_reason={finish}" if finish else " (")
+            + f", рассуждений {len(reasoning)} символов): "
+            "модель не дописала ответ, нужен retry или больший LLM_MAX_TOKENS"
+        )
+
+    if finish == "length":
+        # Ответ обрезан на полуслове: даже если JSON разобрался, часть полей
+        # потеряна, а неполный документ хуже честной ошибки.
+        raise ProviderError(
+            f"ilons обрезал ответ по лимиту токенов (max_tokens="
+            f"{settings.llm_max_tokens}): нужен retry или больший LLM_MAX_TOKENS"
+        )
 
     return LLMResult(
         fields=parse_json_object(content),

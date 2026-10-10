@@ -54,8 +54,18 @@ is_rotation_valid: true
 seen = {}
 
 
-def make_transport(llm_body, ocr_status=200, llm_status=200):
-    """Подставной сервер: отдельно olmOCR, отдельно LLM."""
+def make_transport(
+    llm_body,
+    ocr_status=200,
+    llm_status=200,
+    finish_reason="stop",
+    reasoning=None,
+):
+    """Подставной сервер: отдельно olmOCR, отдельно LLM.
+
+    `reasoning` имитирует reasoning-модель ilons: размышления приходят в
+    отдельном поле, ответ — в content.
+    """
 
     def handler(request: httpx.Request) -> httpx.Response:
         host = request.url.host
@@ -71,12 +81,16 @@ def make_transport(llm_body, ocr_status=200, llm_status=200):
         seen["llm_auth"] = request.headers.get("authorization")
         if llm_status != 200:
             return httpx.Response(llm_status, text="boom")
+
+        message = {"content": llm_body}
+        if reasoning is not None:
+            message["reasoning_content"] = reasoning
         return httpx.Response(
             200,
             json={
                 "model": "Qwen/Qwen3.8-27B",
                 "usage": {"total_tokens": 321},
-                "choices": [{"message": {"content": llm_body}}],
+                "choices": [{"message": message, "finish_reason": finish_reason}],
             },
         )
 
@@ -194,6 +208,78 @@ async def main():
         check("LLM 502 -> ProviderError", True, str(exc)[:60])
     finally:
         httpx.AsyncClient = original
+
+    print("\n5a. Qwen у ilons — reasoning-модель")
+    original = patch_httpx(make_transport(body))
+    try:
+        res = await recognize(DocType.PASSPORT_RF, jpeg())
+    finally:
+        httpx.AsyncClient = original
+    check("запас токенов не меньше 1500",
+          seen["llm_request"]["max_tokens"] >= 1500,
+          str(seen["llm_request"]["max_tokens"]))
+
+    # Размышления содержат черновые, неверные значения полей. Если разобрать
+    # reasoning_content вместо content, в БД попадёт мусор.
+    reasoning = json.dumps({"series": "0000", "number": "999999"}, ensure_ascii=False)
+    original = patch_httpx(make_transport(body, reasoning="Подумаем... " + reasoning))
+    try:
+        res = await recognize(DocType.PASSPORT_RF, jpeg())
+    finally:
+        httpx.AsyncClient = original
+    check("берём content, а не reasoning_content",
+          res.fields["series"] == "4504" and res.fields["number"] == "123456",
+          str(res.fields["series"]) + "/" + str(res.fields["number"]))
+
+    original = patch_httpx(make_transport("", reasoning="думал, но не успел"))
+    try:
+        await recognize(DocType.PASSPORT_RF, jpeg())
+        check("пустой content -> ошибка", False, "исключения не было")
+    except ProviderError as exc:
+        check("пустой content -> ошибка с подсказкой про LLM_MAX_TOKENS",
+              "LLM_MAX_TOKENS" in str(exc), str(exc)[:90])
+    finally:
+        httpx.AsyncClient = original
+
+    truncated = '{"series": "4504", "number": "123456", "full_na'
+    original = patch_httpx(make_transport(truncated, finish_reason="length"))
+    try:
+        await recognize(DocType.PASSPORT_RF, jpeg())
+        check("обрезанный ответ -> ошибка", False, "исключения не было")
+    except ProviderError as exc:
+        check("finish_reason=length -> ошибка, неполный документ не сохраняем",
+              "обрезал" in str(exc), str(exc)[:90])
+    finally:
+        httpx.AsyncClient = original
+
+    # Reasoning-модель любит дописать комментарий после ответа — иногда
+    # с фигурными скобками.
+    trailing = (
+        json.dumps({"series": "4504", "number": "123456",
+                    "full_name": "ИВАНОВ ИВАН", "birth_date": "01.01.1990"},
+                   ensure_ascii=False)
+        + '\n\nПримечание: место рождения не читается {неразборчиво}.'
+    )
+    original = patch_httpx(make_transport(trailing))
+    try:
+        res = await recognize(DocType.PASSPORT_RF, jpeg())
+    finally:
+        httpx.AsyncClient = original
+    check("берём первый сбалансированный объект, мусор после ответа не мешает",
+          res.fields["number"] == "123456", str(res.fields))
+
+    # Фигурные скобки внутри строкового значения не должны ломать разбор.
+    braces = json.dumps({"series": "4504", "number": "123456",
+                         "full_name": "ИВАНОВ ИВАН",
+                         "birth_date": "01.01.1990",
+                         "issued_by": "ОВД {Басманный}"}, ensure_ascii=False)
+    original = patch_httpx(make_transport(braces))
+    try:
+        res = await recognize(DocType.PASSPORT_RF, jpeg())
+    finally:
+        httpx.AsyncClient = original
+    check("скобки внутри значения не ломают разбор",
+          res.fields["issued_by"] == "ОВД {Басманный}", str(res.fields.get("issued_by")))
 
     print("\n6. Переключение провайдера только через env")
     def ollama_handler(request):
