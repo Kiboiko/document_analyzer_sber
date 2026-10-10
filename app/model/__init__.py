@@ -101,6 +101,8 @@ def _pick_fields(doc_type: DocType, raw: dict) -> tuple[dict, dict]:
 async def recognize(doc_type: DocType, image_bytes: bytes) -> ExtractResult:
     """Распознать документ: OCR -> LLM -> нормализованные поля.
 
+    Архитектурное обоснование: см. `docs/DECISIONS.md`, раздел 2.
+
     Ошибка провайдера или битый ввод поднимаются наружу как `ProviderError`:
     решение про retry и статус документа принимает воркер. Выдуманных данных
     не возвращаем — нераспознанное поле остаётся `None`.

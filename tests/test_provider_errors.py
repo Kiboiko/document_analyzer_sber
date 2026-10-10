@@ -167,6 +167,8 @@ async def expect_provider_error(title, handler, needle):
             await recognize(DocType.PASSPORT_RF, jpeg())
     except ProviderError as exc:
         check(title, needle.lower() in str(exc).lower(), str(exc)[:110])
+        check(f"{title}: retryable задан", isinstance(exc.retryable, bool))
+        check(f"{title}: user_message задан", bool(exc.user_message))
     except Exception as exc:  # noqa: BLE001
         check(title, False, f"сырое {type(exc).__name__}: {str(exc)[:80]}")
     else:

@@ -23,6 +23,7 @@ from app.model.providers import (
 log = logging.getLogger(__name__)
 
 NAME = "local"
+_MODEL_DOWN = "Сервис распознавания временно недоступен. Мы повторим попытку позже."
 
 _SYSTEM = (
     "Ты извлекаешь поля из текста документа. "
@@ -72,12 +73,25 @@ async def complete_json(prompt: str, text: str) -> LLMResult:
             resp = await client.post(f"{_base_url()}/api/chat", json=payload)
             resp.raise_for_status()
     except httpx.HTTPError as exc:
-        raise ProviderError(f"Ollama /api/chat: {describe_http_error(exc)}") from exc
-    data = response_json(resp, "Ollama /api/chat")
+        raise ProviderError(
+            f"Ollama /api/chat: {describe_http_error(exc)}",
+            retryable=True,
+            user_message=_MODEL_DOWN,
+        ) from exc
+    try:
+        data = response_json(resp, "Ollama /api/chat")
+    except ProviderError as exc:
+        raise ProviderError(
+            str(exc), retryable=True, user_message=_MODEL_DOWN
+        ) from exc
 
     if data.get("error"):
         # Ollama иногда отвечает 200 с текстом ошибки в теле.
-        raise ProviderError(f"Ollama /api/chat: {str(data['error'])[:300]}")
+        raise ProviderError(
+            f"Ollama /api/chat: {str(data['error'])[:300]}",
+            retryable=True,
+            user_message=_MODEL_DOWN,
+        )
 
     message = data.get("message")
     raw_content = message.get("content") if isinstance(message, dict) else None
@@ -88,7 +102,9 @@ async def complete_json(prompt: str, text: str) -> LLMResult:
         raise ProviderError(
             "Ollama вернул пустой content"
             + (f" (done_reason={done_reason})" if done_reason else "")
-            + ": модель не дала ответа, нужен retry"
+            + ": модель не дала ответа, нужен retry",
+            retryable=True,
+            user_message=_MODEL_DOWN,
         )
 
     if done_reason == "length":
@@ -96,11 +112,20 @@ async def complete_json(prompt: str, text: str) -> LLMResult:
         # потеряна, а неполный документ хуже честной ошибки.
         raise ProviderError(
             f"Ollama обрезал ответ по лимиту токенов (num_predict="
-            f"{settings.llm_max_tokens}): нужен retry или больший LLM_MAX_TOKENS"
+            f"{settings.llm_max_tokens}): нужен retry или больший LLM_MAX_TOKENS",
+            retryable=True,
+            user_message=_MODEL_DOWN,
         )
 
+    try:
+        fields = parse_json_object(content)
+    except ProviderError as exc:
+        raise ProviderError(
+            str(exc), retryable=True, user_message=_MODEL_DOWN
+        ) from exc
+
     return LLMResult(
-        fields=parse_json_object(content),
+        fields=fields,
         usage={
             "prompt_eval_count": data.get("prompt_eval_count"),
             "eval_count": data.get("eval_count"),

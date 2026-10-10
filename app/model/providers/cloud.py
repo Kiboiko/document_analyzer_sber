@@ -21,6 +21,7 @@ from app.model.providers import (
 log = logging.getLogger(__name__)
 
 NAME = "cloud"
+_MODEL_DOWN = "Сервис распознавания временно недоступен. Мы повторим попытку позже."
 
 #: Системная инструкция: роль модели — извлечь, а не рассуждать.
 _SYSTEM = (
@@ -90,9 +91,16 @@ async def complete_json(prompt: str, text: str) -> LLMResult:
             resp.raise_for_status()
     except httpx.HTTPError as exc:
         raise ProviderError(
-            f"ilons chat/completions: {describe_http_error(exc)}"
+            f"ilons chat/completions: {describe_http_error(exc)}",
+            retryable=True,
+            user_message=_MODEL_DOWN,
         ) from exc
-    data = response_json(resp, "ilons chat/completions")
+    try:
+        data = response_json(resp, "ilons chat/completions")
+    except ProviderError as exc:
+        raise ProviderError(
+            str(exc), retryable=True, user_message=_MODEL_DOWN
+        ) from exc
 
     try:
         choice = data["choices"][0]
@@ -101,7 +109,9 @@ async def complete_json(prompt: str, text: str) -> LLMResult:
             raise TypeError("message не объект")
     except (KeyError, IndexError, TypeError) as exc:
         raise ProviderError(
-            f"неожиданная форма ответа ilons: {str(data)[:300]}"
+            f"неожиданная форма ответа ilons: {str(data)[:300]}",
+            retryable=True,
+            user_message=_MODEL_DOWN,
         ) from exc
 
     # Ответ берём только из content. reasoning_content — это размышления
@@ -117,7 +127,9 @@ async def complete_json(prompt: str, text: str) -> LLMResult:
             "ilons вернул пустой content"
             + (f" (finish_reason={finish}" if finish else " (")
             + f", рассуждений {len(reasoning)} символов): "
-            "модель не дописала ответ, нужен retry или больший LLM_MAX_TOKENS"
+            "модель не дописала ответ, нужен retry или больший LLM_MAX_TOKENS",
+            retryable=True,
+            user_message=_MODEL_DOWN,
         )
 
     if finish == "length":
@@ -125,11 +137,20 @@ async def complete_json(prompt: str, text: str) -> LLMResult:
         # потеряна, а неполный документ хуже честной ошибки.
         raise ProviderError(
             f"ilons обрезал ответ по лимиту токенов (max_tokens="
-            f"{settings.llm_max_tokens}): нужен retry или больший LLM_MAX_TOKENS"
+            f"{settings.llm_max_tokens}): нужен retry или больший LLM_MAX_TOKENS",
+            retryable=True,
+            user_message=_MODEL_DOWN,
         )
 
+    try:
+        fields = parse_json_object(content)
+    except ProviderError as exc:
+        raise ProviderError(
+            str(exc), retryable=True, user_message=_MODEL_DOWN
+        ) from exc
+
     return LLMResult(
-        fields=parse_json_object(content),
+        fields=fields,
         usage=data.get("usage", {}) or {},
         model=data.get("model", settings.llm_model),
     )
