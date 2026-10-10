@@ -1,7 +1,7 @@
 """Local-LLM: Ollama (OLLAMA_HOST, LOCAL_VLM_MODEL) — вариант on-prem (TZ 7).
 
 Переключение: MODEL_PROVIDER=local. Инструкция — docs/LOCAL_MODEL.md.
-OCR в обоих вариантах остаётся self-hosted (olmOCR); локально заменяется
+OCR в обоих вариантах один и тот же сервис (OCR_SERVICE_URL); локально заменяется
 только LLM — на вход так же приходит текст, а не картинка.
 """
 
