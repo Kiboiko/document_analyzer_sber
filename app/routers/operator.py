@@ -8,31 +8,73 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.db import get_session
-from app.enums import Country, DocStatus
+from app.enums import (
+    DOC_TYPE_TITLES,
+    FIELD_TITLES,
+    REQUIRED_DOCUMENTS,
+    Country,
+    CrossCheckStatus,
+    DocStatus,
+    EventType,
+    FieldSource,
+    Role,
+)
+from app.model import validate
+from app.models import Application, CrossCheck, Document, Field
+from app.routers.auth import current_user
 from app.schemas import (
     ApplicationCard,
+    ApplicationListItem,
     ApplicationListOut,
+    CrossCheckOut,
     CurrentUser,
+    DocumentOut,
     FieldOut,
     FieldPatch,
+    FileOut,
     QueueStats,
     ReparseResult,
 )
+from app.services import history, queue
 
 router = APIRouter(tags=["operator"])
 
 
-async def require_operator(request: Request) -> CurrentUser:
-    """Зависимость: пускать только с ролью operator или admin.
+def _field_out(field: Field) -> FieldOut:
+    out = FieldOut.model_validate(field)
+    out.title = FIELD_TITLES.get(field.name)
+    return out
 
-    TODO(Кирилл): читать OIDC-сессию, 401/403 на сервере, не на клиенте.
-    """
-    raise NotImplementedError
+
+def _document_out(document: Document) -> DocumentOut:
+    return DocumentOut(
+        id=document.id,
+        doc_type=document.doc_type,
+        title=DOC_TYPE_TITLES.get(document.doc_type),
+        status=document.status,
+        error_reason=document.error_reason,
+        created_at=document.created_at,
+        updated_at=document.updated_at,
+        files=[FileOut.model_validate(f) for f in document.files],
+        fields=[_field_out(f) for f in document.fields],
+    )
+
+
+async def require_operator(request: Request) -> CurrentUser:
+    """Зависимость: пускать только с ролью operator или admin."""
+    user = current_user(request)
+    if user is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "требуется вход")
+    if not (user.has_role(Role.OPERATOR.value) or user.has_role(Role.ADMIN.value)):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "требуется роль operator")
+    return user
 
 
 # --------------------------------------------------------------------------- #
@@ -43,11 +85,19 @@ async def require_operator(request: Request) -> CurrentUser:
 @router.get("/operator", response_class=HTMLResponse)
 async def page_applications(
     request: Request,
+    country: Country | None = None,
+    status: DocStatus | None = None,
+    q: str | None = None,
     user: CurrentUser = Depends(require_operator),
     session: AsyncSession = Depends(get_session),
 ) -> HTMLResponse:
     """Список заявок с фильтрами (страна, статус, поиск)."""
-    raise NotImplementedError  # TODO(Кирилл)
+    data = await list_applications(
+        country=country, status=status, q=q, user=user, session=session
+    )
+    return request.app.state.templates.TemplateResponse(
+        request, "operator/applications.html", {"user": user, "data": data}
+    )
 
 
 @router.get("/operator/applications/{application_id}", response_class=HTMLResponse)
@@ -58,7 +108,12 @@ async def page_application_card(
     session: AsyncSession = Depends(get_session),
 ) -> HTMLResponse:
     """Карточка: оригинал рядом с полями, замечания, таймлайн истории."""
-    raise NotImplementedError  # TODO(Кирилл)
+    card = await get_application_card(
+        application_id=application_id, user=user, session=session
+    )
+    return request.app.state.templates.TemplateResponse(
+        request, "operator/card.html", {"user": user, "card": card}
+    )
 
 
 @router.get("/operator/queue", response_class=HTMLResponse)
@@ -68,7 +123,10 @@ async def page_queue(
     session: AsyncSession = Depends(get_session),
 ) -> HTMLResponse:
     """Раздел «в работе»: что ждёт, что разбирается, среднее время."""
-    raise NotImplementedError  # TODO(Кирилл)
+    stats = await queue_stats(user=user, session=session)
+    return request.app.state.templates.TemplateResponse(
+        request, "operator/queue.html", {"user": user, "stats": stats}
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -87,7 +145,71 @@ async def list_applications(
     session: AsyncSession = Depends(get_session),
 ) -> ApplicationListOut:
     """Список заявок с фильтрами."""
-    raise NotImplementedError  # TODO(Кирилл)
+    base_stmt = select(Application)
+    if country is not None:
+        base_stmt = base_stmt.where(Application.country == country)
+    if status is not None:
+        base_stmt = base_stmt.where(
+            select(Document.id)
+            .where(Document.application_id == Application.id, Document.status == status)
+            .exists()
+        )
+    if q and q.strip():
+        pattern = f"%{q.strip()}%"
+        base_stmt = base_stmt.where(
+            select(Field.id)
+            .join(Document, Document.id == Field.document_id)
+            .where(
+                Document.application_id == Application.id,
+                Field.name == "full_name",
+                Field.value.ilike(pattern),
+            )
+            .exists()
+        )
+
+    total = await session.scalar(
+        select(func.count()).select_from(base_stmt.with_only_columns(Application.id).subquery())
+    )
+
+    stmt = (
+        base_stmt.options(selectinload(Application.documents))
+        .order_by(Application.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    applications = list((await session.scalars(stmt)).unique().all())
+
+    mismatch_ids: set[uuid.UUID] = set()
+    if applications:
+        rows = await session.scalars(
+            select(CrossCheck.application_id)
+            .where(
+                CrossCheck.application_id.in_([a.id for a in applications]),
+                CrossCheck.status == CrossCheckStatus.MISMATCH,
+            )
+            .distinct()
+        )
+        mismatch_ids = set(rows.all())
+
+    items = [
+        ApplicationListItem(
+            id=app_.id,
+            country=app_.country,
+            status=app_.status,
+            created_at=app_.created_at,
+            updated_at=app_.updated_at,
+            documents_total=len(app_.documents),
+            documents_done=sum(1 for d in app_.documents if d.status == DocStatus.DONE),
+            documents_error=sum(1 for d in app_.documents if d.status == DocStatus.ERROR),
+            documents_flagged=sum(
+                1 for d in app_.documents if d.status == DocStatus.FLAGGED
+            ),
+            has_mismatch=app_.id in mismatch_ids,
+        )
+        for app_ in applications
+    ]
+
+    return ApplicationListOut(items=items, total=total or 0, limit=limit, offset=offset)
 
 
 @router.get(
