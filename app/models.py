@@ -6,9 +6,12 @@ import uuid
 from datetime import datetime
 from typing import Any
 
+from enum import Enum as PyEnum
+
 from sqlalchemy import (
     BigInteger,
     DateTime,
+    Enum,
     Float,
     ForeignKey,
     Index,
@@ -43,19 +46,39 @@ def _uuid4() -> uuid.UUID:
     return uuid.uuid4()
 
 
+def _enum(py_enum: type[PyEnum], length: int = 32) -> Enum:
+    """Колонка-перечисление: VARCHAR + CHECK, значения — из `.value`.
+
+    Зачем не просто String: с обычной строкой из БД возвращается `str`, а не
+    член перечисления, и `document.status.value` падает на объекте ORM, хотя
+    на DTO работает. Такая разница между слоями — готовый источник ошибок.
+    CHECK заодно не даст записать статус, которого нет в перечислении:
+    проверка остаётся на сервере даже при прямой правке в psql.
+    """
+    return Enum(
+        py_enum,
+        native_enum=False,
+        length=length,
+        # В SQLAlchemy 2 CHECK по умолчанию не создаётся — просим явно.
+        create_constraint=True,
+        values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        validate_strings=True,
+    )
+
+
 class Application(Base):
     """Заявка соискателя. Доступ соискателя — по applicant_token."""
 
     __tablename__ = "applications"
 
     id: Mapped[uuid.UUID] = mapped_column(_UUID, primary_key=True, default=_uuid4)
-    country: Mapped[Country] = mapped_column(String(8), nullable=False)
+    country: Mapped[Country] = mapped_column(_enum(Country, 8), nullable=False)
     # Невычисляемый токен для публичной ссылки (TZ 1).
     applicant_token: Mapped[uuid.UUID] = mapped_column(
         _UUID, nullable=False, unique=True, index=True, default=_uuid4
     )
     status: Mapped[ApplicationStatus] = mapped_column(
-        String(16), nullable=False, default=ApplicationStatus.CREATED
+        _enum(ApplicationStatus, 16), nullable=False, default=ApplicationStatus.CREATED
     )
     created_at: Mapped[datetime] = mapped_column(
         _TS, nullable=False, server_default=func.now()
@@ -93,9 +116,9 @@ class Document(Base):
         nullable=False,
         index=True,
     )
-    doc_type: Mapped[DocType] = mapped_column(String(32), nullable=False)
+    doc_type: Mapped[DocType] = mapped_column(_enum(DocType), nullable=False)
     status: Mapped[DocStatus] = mapped_column(
-        String(16), nullable=False, default=DocStatus.ACCEPTED
+        _enum(DocStatus, 16), nullable=False, default=DocStatus.ACCEPTED
     )
     # Понятная человеку причина error / flagged.
     error_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -171,7 +194,7 @@ class Field(Base):
     name: Mapped[str] = mapped_column(String(32), nullable=False)
     value: Mapped[str | None] = mapped_column(Text, nullable=True)
     source: Mapped[FieldSource] = mapped_column(
-        String(16), nullable=False, default=FieldSource.MODEL
+        _enum(FieldSource, 16), nullable=False, default=FieldSource.MODEL
     )
     # Уверенность модели, 0..1 (может отсутствовать).
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -205,7 +228,7 @@ class Job(Base):
         index=True,
     )
     status: Mapped[JobStatus] = mapped_column(
-        String(16), nullable=False, default=JobStatus.PENDING
+        _enum(JobStatus, 16), nullable=False, default=JobStatus.PENDING
     )
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # Когда воркер взял задачу. Устаревший lock — реапер вернёт в pending.
@@ -246,7 +269,7 @@ class Event(Base):
         nullable=True,
         index=True,
     )
-    type: Mapped[EventType] = mapped_column(String(32), nullable=False)
+    type: Mapped[EventType] = mapped_column(_enum(EventType), nullable=False)
     # Кто инициировал: applicant, worker, логин оператора или админа.
     actor: Mapped[str] = mapped_column(String(128), nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
@@ -271,8 +294,8 @@ class CrossCheck(Base):
         nullable=False,
         index=True,
     )
-    kind: Mapped[CrossCheckKind] = mapped_column(String(16), nullable=False)
-    status: Mapped[CrossCheckStatus] = mapped_column(String(16), nullable=False)
+    kind: Mapped[CrossCheckKind] = mapped_column(_enum(CrossCheckKind, 16), nullable=False)
+    status: Mapped[CrossCheckStatus] = mapped_column(_enum(CrossCheckStatus, 16), nullable=False)
     # Человекочитаемое пояснение расхождения.
     detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

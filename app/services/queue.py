@@ -8,15 +8,39 @@ from __future__ import annotations
 
 import uuid
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.enums import JobStatus
 from app.models import Job
 from app.schemas import QueueStats
 
 
 async def enqueue(session: AsyncSession, document_id: uuid.UUID) -> Job:
-    """Поставить задачу разбора документа в очередь (status=pending)."""
-    raise NotImplementedError  # TODO(Кирилл)
+    """Поставить задачу разбора документа в очередь (status=pending).
+
+    Идемпотентно: если по документу уже висит невзятая задача, возвращаем её.
+    Иначе дозагрузка трёх файлов в один документ дала бы три разбора одного
+    и того же, а olmOCR у нас один на команду.
+
+    Коммит — за вызывающим: задача должна попасть в БД той же транзакцией,
+    что и принятые файлы.
+
+    NB(Кирилл): эту функцию добавил Степан, чтобы разблокировать приём
+    (`services/intake.py`). Остальное в файле — твоё.
+    """
+    existing = await session.scalar(
+        select(Job)
+        .where(Job.document_id == document_id, Job.status == JobStatus.PENDING)
+        .limit(1)
+    )
+    if existing is not None:
+        return existing
+
+    job = Job(document_id=document_id, status=JobStatus.PENDING)
+    session.add(job)
+    await session.flush()
+    return job
 
 
 async def claim_next(session: AsyncSession, worker_id: str) -> Job | None:

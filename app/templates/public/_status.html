@@ -1,1 +1,67 @@
-{# TODO(Степан): htmx-фрагмент статусов документов, самообновление поллингом. #}
+{# htmx-фрагмент статусов документов. Подменяет сам себя целиком, поэтому
+   правила поллинга объявлены здесь: пока что-то в разборе — обновляемся
+   каждые 3 секунды, когда разбирать больше нечего — перестаём. #}
+<div id="status"
+     hx-get="/a/{{ token }}/status"
+     {% if keep_polling %}hx-trigger="every 3s"{% endif %}
+     hx-swap="outerHTML">
+
+  {% if not status.documents %}
+    <p class="hint">Пока ничего не загружено.</p>
+  {% endif %}
+
+  {% for doc in status.documents %}
+    <article class="card doc status-{{ doc.status.value }}">
+      <header>
+        <h3>{{ doc.title or doc.doc_type.value }}</h3>
+        <span class="badge badge-{{ doc.status.value }}">
+          {% if doc.status.value == 'accepted' %}принят, ждёт разбора
+          {% elif doc.status.value == 'processing' %}распознаём…
+          {% elif doc.status.value == 'done' %}готово
+          {% elif doc.status.value == 'flagged' %}готово, есть замечание
+          {% elif doc.status.value == 'error' %}не распознано
+          {% endif %}
+        </span>
+      </header>
+
+      {% if doc.error_reason %}
+        <p class="alert {{ 'error' if doc.status.value == 'error' else 'warn' }}">
+          {{ doc.error_reason }}
+        </p>
+      {% endif %}
+
+      {% if doc.files %}
+        <ul class="files">
+          {% for file in doc.files %}
+            <li>{{ file.orig_name }} <small>{{ (file.size / 1024) | round | int }} КБ</small></li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+
+      {% if doc.fields %}
+        <dl class="fields">
+          {% for field in doc.fields %}
+            {% if field.value %}
+              <dt>{{ field.title or field.name }}</dt>
+              <dd>
+                {{ field.value }}
+                {% if not field.is_valid %}
+                  <span class="warn-inline">{{ field.validation_msg }}</span>
+                {% endif %}
+              </dd>
+            {% endif %}
+          {% endfor %}
+        </dl>
+      {% endif %}
+    </article>
+  {% endfor %}
+
+  {% if status.missing_documents %}
+    <p class="alert warn">
+      Ещё не загружено:
+      {% for doc_type in status.missing_documents %}
+        {{ doc_titles[doc_type.value] }}{% if not loop.last %}, {% endif %}
+      {% endfor %}
+    </p>
+  {% endif %}
+</div>
