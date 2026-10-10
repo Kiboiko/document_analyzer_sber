@@ -13,7 +13,7 @@ import logging
 import httpx
 
 from app.config import settings
-from app.model.providers import ProviderError
+from app.model.providers import ProviderError, describe_http_error, response_json
 
 log = logging.getLogger(__name__)
 
@@ -170,14 +170,31 @@ async def ocr_text(image_bytes: bytes) -> str:
         async with httpx.AsyncClient(timeout=settings.model_timeout_s) as client:
             resp = await client.post(url, json=payload)
             resp.raise_for_status()
-            data = resp.json()
     except httpx.HTTPError as exc:
-        raise OcrError(f"olmOCR недоступен: {exc}") from exc
+        raise OcrError(f"olmOCR недоступен: {describe_http_error(exc)}") from exc
 
     try:
-        content = data["choices"][0]["message"]["content"]
+        data = response_json(resp, "olmOCR")
+    except ProviderError as exc:
+        raise OcrError(str(exc)) from exc
+
+    try:
+        choice = data["choices"][0]
+        content = choice["message"]["content"]
     except (KeyError, IndexError, TypeError) as exc:
-        raise OcrError(f"неожиданная форма ответа olmOCR: {data}") from exc
+        raise OcrError(f"неожиданная форма ответа olmOCR: {str(data)[:300]}") from exc
+
+    if content is not None and not isinstance(content, str):
+        raise OcrError(f"olmOCR вернул content типа {type(content).__name__}")
+
+    if choice.get("finish_reason") == "length":
+        # Страница прочитана не до конца: поля из хвоста документа потеряны,
+        # а модель дальше «извлечёт» то, что осталось, и документ выглядел бы
+        # разобранным. Честная ошибка с retry лучше.
+        raise OcrError(
+            "olmOCR обрезал текст страницы по лимиту токенов: "
+            "нужен retry или больший max_tokens"
+        )
 
     # Сырой ответ нужен, чтобы сверить разбор с тем, что реально отдаёт сервер.
     # В нём персональные данные, поэтому только DEBUG (settings.debug).

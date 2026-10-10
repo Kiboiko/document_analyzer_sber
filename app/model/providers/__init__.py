@@ -11,11 +11,52 @@ import json
 import re
 from dataclasses import dataclass, field
 
-__all__ = ["parse_json_object", "ProviderError", "LLMResult"]
+import httpx
+
+__all__ = [
+    "parse_json_object",
+    "ProviderError",
+    "LLMResult",
+    "describe_http_error",
+    "response_json",
+]
 
 
 class ProviderError(RuntimeError):
     """Провайдер не ответил или ответил неразбираемым. Решение о retry — у воркера."""
+
+
+def describe_http_error(exc: httpx.HTTPError) -> str:
+    """Человекочитаемая причина сетевой ошибки.
+
+    У таймаутов `str(exc)` пустой, поэтому одного текста исключения мало:
+    в журнале останется «ilons: » без причины. Добавляем класс ошибки и,
+    для ответов с кодом 4xx/5xx, тело — в нём обычно и есть объяснение сервера.
+    """
+    kind = type(exc).__name__
+    if isinstance(exc, httpx.TimeoutException):
+        return f"таймаут ({kind})"
+    if isinstance(exc, httpx.HTTPStatusError):
+        body = (exc.response.text or "").strip().replace("\n", " ")[:300]
+        return f"HTTP {exc.response.status_code}" + (f": {body}" if body else "")
+    return f"{kind}: {exc}".rstrip(": ")
+
+
+def response_json(resp: httpx.Response, who: str) -> dict:
+    """Тело ответа как словарь, иначе ProviderError.
+
+    `resp.json()` бросает ValueError, а не HTTPError: шлюз, отдавший 200 с
+    HTML-страницей или обрезанным телом, иначе уронил бы воркер сырым
+    исключением.
+    """
+    try:
+        data = resp.json()
+    except ValueError as exc:
+        snippet = (resp.text or "").strip().replace("\n", " ")[:200]
+        raise ProviderError(f"{who}: ответ не JSON: {snippet!r}") from exc
+    if not isinstance(data, dict):
+        raise ProviderError(f"{who}: ожидался JSON-объект, пришло {type(data).__name__}")
+    return data
 
 
 @dataclass(slots=True)
