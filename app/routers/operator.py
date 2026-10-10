@@ -222,7 +222,36 @@ async def get_application_card(
     session: AsyncSession = Depends(get_session),
 ) -> ApplicationCard:
     """Карточка заявки: оригиналы, поля, события, замечания."""
-    raise NotImplementedError  # TODO(Кирилл)
+    app_ = await session.get(
+        Application,
+        application_id,
+        options=[
+            selectinload(Application.documents).selectinload(Document.files),
+            selectinload(Application.documents).selectinload(Document.fields),
+            selectinload(Application.cross_checks),
+        ],
+    )
+    if app_ is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "заявка не найдена")
+
+    required = REQUIRED_DOCUMENTS.get(app_.country, ())
+    present_types = {d.doc_type for d in app_.documents}
+    missing = [t for t in required if t not in present_types]
+
+    events = await history.timeline(session, application_id)
+
+    return ApplicationCard(
+        id=app_.id,
+        country=app_.country,
+        status=app_.status,
+        created_at=app_.created_at,
+        updated_at=app_.updated_at,
+        required_documents=list(required),
+        missing_documents=missing,
+        documents=[_document_out(d) for d in app_.documents],
+        events=events,
+        cross_checks=[CrossCheckOut.model_validate(c) for c in app_.cross_checks],
+    )
 
 
 @router.patch(
