@@ -3,12 +3,40 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}Документы соискателя{% endblock %}</title>
+  <title>{% block title %}Приём документов{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}">
-  {# TODO: положить htmx.min.js в app/static/ (офлайн, без CDN). #}
   <script src="{{ url_for('static', path='/htmx.min.js') }}" defer></script>
 </head>
-<body>
-  <main>{% block content %}{% endblock %}</main>
+<body class="{% block body_class %}{% endblock %}">
+  {% set path = request.url.path %}
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="{{ '/operator' if user else '/' }}">
+        <span class="brand-mark" aria-hidden="true">Д</span>
+        <span>Приём документов</span>
+      </a>
+      {% if user %}
+        <nav class="topnav" aria-label="Разделы">
+          <a href="/operator" {% if path == '/operator' or path.startswith('/operator/applications') %}aria-current="page"{% endif %}>Заявки</a>
+          <a href="/operator/queue" {% if path == '/operator/queue' %}aria-current="page"{% endif %}>Очередь</a>
+          {% if user.has_role('admin') %}
+            <a href="/admin/operators" {% if path.startswith('/admin') %}aria-current="page"{% endif %}>Операторы</a>
+          {% endif %}
+        </nav>
+        <div class="topbar-user">
+          <span class="user-name">{{ user.username }}
+            <small>{{ 'администратор' if user.has_role('admin') else 'оператор' }}</small>
+          </span>
+          <a class="button button-ghost" href="/auth/logout">Выйти</a>
+        </div>
+      {% else %}
+        <a class="topbar-staff" href="/operator">Вход для сотрудников</a>
+      {% endif %}
+    </div>
+  </header>
+
+  <main class="{% block main_class %}page{% endblock %}">
+    {% block content %}{% endblock %}
+  </main>
 </body>
 </html>
