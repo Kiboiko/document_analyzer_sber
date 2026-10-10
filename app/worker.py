@@ -59,6 +59,7 @@ async def _fail_document(
     session, job_id: uuid.UUID, document: Document, reason: str
 ) -> None:
     """Документ не разобран: error_reason, Event(parse_failed), Job в retry/failed."""
+    log.warning("job %s: документ %s не разобран: %s", job_id, document.id, reason)
     document.status = DocStatus.ERROR
     document.error_reason = reason
     await history.record(
@@ -114,8 +115,11 @@ async def process_job(job: Job) -> None:
         try:
             result = await recognize(document.doc_type, image_bytes)
         except Exception as exc:  # провайдер/сеть — не валим воркер (TZ 6)
-            log.warning("recognize failed for document %s: %s", document_id, exc)
-            await _fail_document(session, job_id, document, f"ошибка модели: {exc}")
+            # У части исключений (например NotImplementedError) текст пустой —
+            # оператор в карточке должен видеть причину, а не "ошибка модели: ".
+            detail = str(exc) or type(exc).__name__
+            log.warning("recognize failed for document %s: %s", document_id, detail)
+            await _fail_document(session, job_id, document, f"ошибка модели: {detail}")
             return
 
         report = validate_document(document.doc_type, result.fields)
@@ -143,6 +147,10 @@ async def process_job(job: Job) -> None:
                 "crosscheck failed for application %s", document.application_id
             )
             await session.rollback()
+
+        log.info(
+            "job %s: документ %s разобран (%s)", job_id, document_id, report.status.value
+        )
 
     async with session_factory() as job_session:
         await queue.mark_done(job_session, job_id)
