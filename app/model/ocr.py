@@ -21,7 +21,7 @@ import logging
 import httpx
 
 from app.config import settings
-from app.model.providers import ProviderError, describe_http_error
+from app.model.providers import SERVICE_DOWN_MESSAGE, ProviderError, describe_http_error
 
 log = logging.getLogger(__name__)
 
@@ -34,15 +34,20 @@ class OcrError(ProviderError):
 
 #: Что показать соискателю при сбое самого сервиса: в нём мы не виноваты и
 #: он не должен гадать, что с его файлом.
-_SERVICE_DOWN = "Сервис распознавания временно недоступен. Мы повторим попытку позже."
+_SERVICE_DOWN = SERVICE_DOWN_MESSAGE
 
 _EXT_BY_MIME = {
     "image/jpeg": ".jpg",
     "image/png": ".png",
     "image/webp": ".webp",
     "image/tiff": ".tif",
+    "image/heic": ".heic",
+    "image/heif": ".heif",
     "application/pdf": ".pdf",
 }
+
+_HEIC_BRANDS = frozenset({b"heic", b"heix", b"hevc", b"hevx"})
+_HEIF_BRANDS = frozenset({b"heif", b"mif1", b"msf1"})
 
 
 def sniff_mime(data: bytes) -> str:
@@ -60,6 +65,14 @@ def sniff_mime(data: bytes) -> str:
         return "image/webp"
     if data[:4] in (b"II*\x00", b"MM\x00*"):
         return "image/tiff"
+    if data[4:8] == b"ftyp":
+        brands = [data[8:12]] + [
+            data[offset : offset + 4] for offset in range(16, len(data), 4)
+        ]
+        if any(brand in _HEIC_BRANDS for brand in brands):
+            return "image/heic"
+        if any(brand in _HEIF_BRANDS for brand in brands):
+            return "image/heif"
     return "application/octet-stream"
 
 

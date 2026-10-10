@@ -88,6 +88,9 @@ class Settings(BaseSettings):
         "image/jpeg",
         "image/png",
         "image/webp",
+        "image/tiff",
+        "image/heic",
+        "image/heif",
         "application/pdf",
     )
 

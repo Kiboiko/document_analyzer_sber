@@ -50,3 +50,16 @@ docker compose --profile ollama up -d   # дополнительно локал�
    полями», правит поле или запускает повторный разбор.
 5. Админ создаёт операторов на `/admin/operators` без прямого доступа к
    консоли Keycloak.
+
+## Проверка API из Windows PowerShell
+
+Сервер отдаёт JSON в UTF-8 с `Content-Type: application/json; charset=utf-8`,
+поэтому `Invoke-RestMethod` читает кириллицу верно. Если кириллица всё же
+превращается в `Р˜Р’Р...`, дело в чтении файла, а не в сервере:
+
+- `curl.exe -o ответ.json ...` сохраняет байты как есть (в UTF-8, без BOM).
+  `Get-Content` в Windows PowerShell 5.1 без параметра читает файл в кодировке
+  ANSI (windows-1251). Читайте так: `Get-Content ответ.json -Encoding UTF8`.
+- Не передавайте результат через `Out-File`/`>` в 5.1 без `-Encoding utf8`:
+  по умолчанию это UTF-16 с BOM.
+- В PowerShell 7 кодировка по умолчанию уже UTF-8, и этих оговорок нет.

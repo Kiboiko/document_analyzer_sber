@@ -19,6 +19,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app.config import settings
 from app.db import create_all, dispose_engine
+from app.http_charset import JsonCharsetMiddleware
 from app.routers import admin, auth, files, operator, public
 from app.schemas import HealthOut
 
@@ -55,6 +56,9 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 
 # Сессия кабинета (OIDC): подписанная cookie, секрет — SESSION_SECRET.
 app.add_middleware(SessionMiddleware, secret_key=settings.session_secret, same_site="lax")
+
+# JSON всегда с charset=utf-8: PowerShell 5.1 без него читает ответ как Latin-1.
+app.add_middleware(JsonCharsetMiddleware)
 
 # Роуты: публичная часть, кабинет оператора, админ, OIDC.
 app.include_router(auth.router)

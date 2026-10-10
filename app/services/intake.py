@@ -35,7 +35,15 @@ log = logging.getLogger(__name__)
 
 #: Что реально умеет читать OCR-слой. Сверяем с содержимым, а не с заголовком.
 ALLOWED_MIME = frozenset(
-    {"image/jpeg", "image/png", "image/webp", "image/tiff", "application/pdf"}
+    {
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+        "image/tiff",
+        "image/heic",
+        "image/heif",
+        "application/pdf",
+    }
 )
 
 
@@ -61,7 +69,7 @@ def check_file(filename: str, mime: str, size: int) -> str | None:
             f"({size / 1024 / 1024:.1f} МБ)"
         )
     if mime not in ALLOWED_MIME:
-        return "неподдерживаемый формат: нужны JPEG, PNG, WEBP, TIFF или PDF"
+        return "неподдерживаемый формат: нужны JPEG, PNG, WEBP, TIFF, HEIC/HEIF или PDF"
     return None
 
 
@@ -85,6 +93,8 @@ _EXT_BY_MIME = {
     "image/png": ".png",
     "image/webp": ".webp",
     "image/tiff": ".tif",
+    "image/heic": ".heic",
+    "image/heif": ".heif",
     "application/pdf": ".pdf",
 }
 
