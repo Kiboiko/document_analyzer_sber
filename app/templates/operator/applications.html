@@ -67,7 +67,7 @@
               <th scope="col">Гражданство</th>
               <th scope="col">Статус заявки</th>
               <th scope="col">Документы</th>
-              <th scope="col">Обновлена</th>
+              <th scope="col">Поступила</th>
             </tr>
           </thead>
           <tbody>
@@ -95,7 +95,7 @@
                   {% if item.documents_error %}<span class="badge badge-error">{{ item.documents_error }} ошибка</span>{% endif %}
                   {% if item.documents_flagged %}<span class="badge badge-flagged">{{ item.documents_flagged }} с замечанием</span>{% endif %}
                 </td>
-                <td class="muted nowrap">{{ item.updated_at.strftime('%d.%m.%Y %H:%M') }}</td>
+                <td class="muted nowrap">{{ item.created_at | dt }}</td>
               </tr>
             {% endfor %}
           </tbody>

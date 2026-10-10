@@ -5,8 +5,8 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
-
 from urllib.parse import quote
 
 from fastapi import FastAPI, Request
@@ -31,6 +31,20 @@ log = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
+# В БД время в UTC, а агентство и соискатели живут по Москве. Фиксированный
+# сдвиг, а не zoneinfo: в slim-образе нет tzdata, а перехода на летнее время
+# в РФ нет.
+_MSK = timezone(timedelta(hours=3))
+
+
+def _format_dt(value: datetime, fmt: str = "%d.%m.%Y %H:%M") -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(_MSK).strftime(fmt)
+
+
+templates.env.filters["dt"] = _format_dt
 
 
 @asynccontextmanager

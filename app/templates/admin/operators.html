@@ -77,7 +77,7 @@
                   {% endif %}
                 </td>
                 <td class="muted nowrap">
-                  {% if operator.created_at %}{{ operator.created_at.strftime('%d.%m.%Y %H:%M') }}{% else %}—{% endif %}
+                  {% if operator.created_at %}{{ operator.created_at | dt }}{% else %}—{% endif %}
                 </td>
               </tr>
             {% endfor %}

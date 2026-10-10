@@ -25,10 +25,11 @@ from app.enums import (
     DocStatus,
     EventType,
     FieldSource,
+    JobStatus,
     Role,
 )
 from app.model import validate
-from app.models import Application, CrossCheck, Document, Field
+from app.models import Application, CrossCheck, Document, Field, Job
 from app.routers.auth import current_user
 from app.schemas import (
     ApplicationCard,
@@ -67,6 +68,29 @@ def _document_out(document: Document) -> DocumentOut:
         files=[FileOut.model_validate(f) for f in document.files],
         fields=[_field_out(f) for f in document.fields],
     )
+
+
+async def _full_names(
+    session: AsyncSession, application_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, str]:
+    """ФИО по заявкам: самое свежее непустое поле full_name из любого документа."""
+    if not application_ids:
+        return {}
+    rows = await session.execute(
+        select(Document.application_id, Field.value)
+        .join(Field, Field.document_id == Document.id)
+        .where(
+            Document.application_id.in_(application_ids),
+            Field.name == "full_name",
+            Field.value.is_not(None),
+            Field.value != "",
+        )
+        .order_by(Field.updated_at.desc())
+    )
+    names: dict[uuid.UUID, str] = {}
+    for app_id, value in rows.all():
+        names.setdefault(app_id, value)
+    return names
 
 
 async def require_operator(request: Request) -> CurrentUser:
@@ -126,10 +150,34 @@ async def page_queue(
     user: CurrentUser = Depends(require_operator),
     session: AsyncSession = Depends(get_session),
 ) -> HTMLResponse:
-    """Раздел «в работе»: что ждёт, что разбирается, среднее время."""
+    """Раздел «в работе»: какие документы ждут и разбираются, плюс цифры."""
     stats = await queue_stats(user=user, session=session)
+    rows = (
+        await session.execute(
+            select(Job, Document)
+            .join(Document, Document.id == Job.document_id)
+            .where(Job.status.in_([JobStatus.PROCESSING, JobStatus.PENDING]))
+            .order_by(Job.status.desc(), Job.created_at)
+            .limit(200)
+        )
+    ).all()
+    names = await _full_names(session, list({d.application_id for _, d in rows}))
+    in_work = [
+        {
+            "processing": job.status == JobStatus.PROCESSING,
+            "doc_title": DOC_TYPE_TITLES.get(doc.doc_type, doc.doc_type.value),
+            "application_id": doc.application_id,
+            "full_name": names.get(doc.application_id),
+            "since": job.locked_at if job.status == JobStatus.PROCESSING else job.created_at,
+            "attempts": job.attempts,
+            "last_error": job.last_error,
+        }
+        for job, doc in rows
+    ]
     return request.app.state.templates.TemplateResponse(
-        request, "operator/queue.html", {"user": user, "stats": stats}
+        request,
+        "operator/queue.html",
+        {"user": user, "stats": stats, "in_work": in_work},
     )
 
 
@@ -195,21 +243,7 @@ async def list_applications(
         )
         mismatch_ids = set(rows.all())
 
-    names: dict[uuid.UUID, str] = {}
-    if applications:
-        name_rows = await session.execute(
-            select(Document.application_id, Field.value)
-            .join(Field, Field.document_id == Document.id)
-            .where(
-                Document.application_id.in_([a.id for a in applications]),
-                Field.name == "full_name",
-                Field.value.is_not(None),
-                Field.value != "",
-            )
-            .order_by(Field.updated_at.desc())
-        )
-        for app_id, value in name_rows.all():
-            names.setdefault(app_id, value)
+    names = await _full_names(session, [a.id for a in applications])
 
     items = [
         ApplicationListItem(

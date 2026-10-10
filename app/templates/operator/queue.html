@@ -63,6 +63,43 @@
       </div>
     </div>
 
+    <h2>Сейчас в работе</h2>
+    {% if in_work %}
+      <div class="table-wrap">
+        <table class="table table-clickable">
+          <thead>
+            <tr>
+              <th scope="col">Состояние</th>
+              <th scope="col">Документ</th>
+              <th scope="col">Соискатель</th>
+              <th scope="col">С какого времени</th>
+              <th scope="col">Попытка</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in in_work %}
+              {% set href = '/operator/applications/' ~ item.application_id %}
+              <tr onclick="location.href='{{ href }}'">
+                <td>
+                  {% if item.processing %}<span class="badge badge-processing">разбирается</span>
+                  {% else %}<span class="badge badge-accepted">ждёт разбора</span>{% endif %}
+                </td>
+                <td><a class="row-link" href="{{ href }}">{{ item.doc_title }}</a></td>
+                <td>{{ item.full_name or '—' }}</td>
+                <td class="muted nowrap">{{ item.since | dt('%H:%M:%S') if item.since else '—' }}</td>
+                <td class="muted">
+                  {{ item.attempts + 1 }}
+                  {% if item.last_error %}<span class="badge badge-flagged" title="{{ item.last_error }}">был сбой</span>{% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="empty">Очередь пуста — все загруженные документы уже разобраны.</div>
+    {% endif %}
+
     {% if stats.failed %}
       <p class="callout callout-warn">
         Документы, которые не удалось распознать, видны в списке заявок с фильтром

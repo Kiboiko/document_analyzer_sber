@@ -22,7 +22,7 @@
         {% elif card.country.value == 'uz' %}Узбекистан
         {% elif card.country.value == 'eu' %}Европа (ЕС)
         {% else %}{{ card.country.value }}{% endif %}
-        · заявка от {{ card.created_at.strftime('%d.%m.%Y %H:%M') }}
+        · заявка от {{ card.created_at | dt }}
         ·
         {% if card.status.value == 'created' %}<span class="badge badge-accepted">ждём документы</span>
         {% elif card.status.value == 'processing' %}<span class="badge badge-processing">в работе</span>
@@ -165,7 +165,7 @@
       <ol class="timeline">
         {% for event in card.events|sort(attribute='created_at') %}
           <li>
-            <time datetime="{{ event.created_at.isoformat() }}">{{ event.created_at.strftime('%d.%m %H:%M:%S') }}</time>
+            <time datetime="{{ event.created_at.isoformat() }}">{{ event.created_at | dt('%d.%m %H:%M:%S') }}</time>
             <span><strong>{{ event_titles.get(event.type, event.type.value) }}</strong> · {{ event.actor }}</span>
             {% if event.payload.error %}<p>Причина: {{ event.payload.error }}</p>
               {% if event.payload.detail %}<p class="muted">Техническая причина: {{ event.payload.detail }}</p>{% endif %}
